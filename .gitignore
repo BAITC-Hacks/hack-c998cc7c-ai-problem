@@ -29,3 +29,6 @@ htmlcov/
 .vscode/
 .idea/
 .DS_Store
+.cache/
+.ruff_cache/
+node_modules/

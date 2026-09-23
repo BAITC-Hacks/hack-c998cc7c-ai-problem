@@ -1,48 +1,228 @@
-import {state,t,esc,$,$$,notify,api,json,field,input,options} from './shared.js';
-import {renderEditor} from './editor.js';
+import {
+  state,
+  t,
+  esc,
+  $,
+  $$,
+  notify,
+  api,
+  json,
+  field,
+  input,
+  options,
+} from "./shared.js";
+import { renderEditor } from "./editor.js";
 
-function navigation(){document.documentElement.lang=state.locale;$('#locale').textContent=state.locale==='kk'?'RU':'KZ';$$('[data-nav]').forEach(b=>{b.textContent={meetings:t('Кездесулер','Совещания'),tasks:t('Тапсырмалар','Поручения'),settings:t('Баптаулар','Настройки')}[b.dataset.nav];b.classList.toggle('active',b.dataset.nav===state.page);b.onclick=()=>location.hash=b.dataset.nav;});}
-
-async function meetings(){
- const {meetings}=await api('/api/meetings');
- $('#app').innerHTML=`<div class="toolbar"><div><h1>${t('Кездесулер','Совещания')}</h1><p class="muted">${t('Жазбадан тексерілген хаттамаға дейін','От записи до проверенного протокола')}</p></div><span class="spacer"></span><button class="primary" id="new">+ ${t('Жазбаны жүктеу','Загрузить запись')}</button></div><section class="panel">${meetings.length?`<div class="table-wrap"><table><thead><tr><th>${t('Кездесу','Совещание')}</th><th>${t('Күні','Дата')}</th><th>${t('Күйі / кезеңі','Статус / этап')}</th><th></th></tr></thead><tbody>${meetings.map(m=>`<tr><td><strong>${esc(m.metadata.title)}</strong><br><small>${esc(m.metadata.mode)} · ${esc(m.filename)}</small></td><td>${esc(m.metadata.meeting_at)}<br><small>${esc(m.metadata.timezone)}</small></td><td>${esc(m.status)}<br><small>${esc(stageName(m.stage))}</small>${m.error?`<p class="notice error">${esc(m.error)}</p>`:''}</td><td><button data-open="${m.id}">${t('Ашу','Открыть')} →</button></td></tr>`).join('')}</tbody></table></div>`:`<div class="empty"><h2>${t('Әзірге кездесу жоқ','Пока нет совещаний')}</h2><p>${t('WAV, MP3 немесе MP4 жүктеңіз. Нәтиже өңдеуден кейін пайда болады.','Загрузите WAV, MP3 или MP4. Результат появится после обработки.')}</p></div>`}</section>`;
- $('#new').onclick=()=>location.hash='upload';$$('[data-open]').forEach(b=>b.onclick=()=>location.hash='meeting/'+b.dataset.open);
+function navigation() {
+  document.documentElement.lang = state.locale;
+  $("#locale").textContent = state.locale === "kk" ? "RU" : "KZ";
+  $$("[data-nav]").forEach((b) => {
+    b.textContent = {
+      meetings: t("Кездесулер", "Совещания"),
+      tasks: t("Тапсырмалар", "Поручения"),
+      settings: t("Баптаулар", "Настройки"),
+    }[b.dataset.nav];
+    b.classList.toggle("active", b.dataset.nav === state.page);
+    b.onclick = () => (location.hash = b.dataset.nav);
+  });
 }
 
-async function upload(){
- const h=await api('/api/health');
- $('#app').innerHTML=`<div class="upload"><h1>${t('Жаңа кездесу','Новое совещание')}</h1><p class="muted">${t('Мерзімдер осы кездесудің күні бойынша есептеледі.','Сроки рассчитываются относительно даты этого совещания.')}</p><form id="upload-form" class="panel"><div class="grid">
- ${field(t('Атауы','Название'),input('','name="title" required maxlength="200"'))}
- ${field(t('Күні мен уақыты','Дата и время'),input('','name="meeting_at" type="datetime-local" required'))}
- ${field(t('Уақыт белдеуі (IANA)','Часовой пояс (IANA)'),input('Asia/Qyzylorda','name="timezone" required'))}
- ${field(t('Қатысушылар (үтір арқылы)','Участники (через запятую)'),input('','name="participants"'))}
- <div class="wide">${field(t('Жазба — WAV / MP3 / MP4','Запись — WAV / MP3 / MP4'),'<input type="file" name="file" accept=".wav,.mp3,.mp4" required>')}<small>${t('Ең үлкен көлем','Максимальный размер')}: ${h.max_upload_mb} MB</small></div>
- ${field(t('Өңдеу режимі','Режим обработки'),`<select name="mode"><option value="LOCAL">LOCAL — ${t('жергілікті LLM','локальный LLM')}</option><option value="RULES">RULES — ${t('шектеулі ережелер','ограниченные правила')}</option><option value="HYBRID">HYBRID — ${t('сыртқы LLM','внешний LLM')}</option></select>`)}
- </div><p id="mode-info" class="notice"></p><label class="check" id="consent-label" hidden><input type="checkbox" name="consent">${t('Транскрипттің сыртқы API-ге жіберілуіне келісемін. Аудио жергілікті қалады.','Разрешаю отправку транскрипта внешнему API. Аудио остаётся локальным.')}</label>
- ${!h.model_available?`<p class="notice">${t('ASR моделі орнатылмаған. Жүктелген жазба үшін нақты қате көрсетіледі; модельді бөлек орнатыңыз.','Модель ASR не установлена. Обработка покажет конкретную ошибку; установите модель отдельно.')}</p>`:''}
- ${!h.ffmpeg_available?`<p class="notice">${t('FFmpeg табылмады. Баптауларды қараңыз.','FFmpeg не найден. См. настройки.')}</p>`:''}
- <div class="toolbar"><button class="primary" type="submit">${t('Жүктеу және өңдеу','Загрузить и обработать')}</button><a class="button" href="#meetings">${t('Артқа','Назад')}</a></div></form></div>`;
- const form=$('#upload-form');
- const modeInfo=()=>{const mode=form.elements.mode.value;$('#consent-label').hidden=mode!=='HYBRID';form.elements.consent.required=mode==='HYBRID';$('#mode-info').textContent=mode==='LOCAL'?t('LOCAL: аудио мен транскрипт осы компьютерде өңделеді. Жергілікті LLM endpoint қажет.','LOCAL: аудио и транскрипт обрабатываются на этом компьютере. Нужен локальный LLM endpoint.'):mode==='RULES'?t('RULES: желісіз жұмыс істейтін шектеулі извлекатель. Барлық нәтижені адам тексереді.','RULES: ограниченный локальный извлекатель. Все результаты требуют проверки человеком.'):t(`HYBRID: транскрипт ${h.hybrid_endpoint||'бапталмаған API'} қызметіне жіберіледі. Бұл жабық контур емес.`,`HYBRID: транскрипт отправляется в ${h.hybrid_endpoint||'не настроенный API'}. Это не закрытый контур.`);};
- form.elements.mode.onchange=modeInfo;modeInfo();
- form.onsubmit=async e=>{e.preventDefault();const button=form.querySelector('button[type=submit]');button.disabled=true;try{const file=form.elements.file.files[0];if(file.size>h.max_upload_mb*1024*1024)throw Error(t('Файл тым үлкен','Файл слишком большой'));const fd=new FormData();fd.append('file',file);fd.append('metadata',JSON.stringify({title:form.elements.title.value,meeting_at:form.elements.meeting_at.value,timezone:form.elements.timezone.value,participants:form.elements.participants.value.split(',').map(s=>s.trim()).filter(Boolean),mode:form.elements.mode.value,hybrid_consent:form.elements.consent.checked}));const r=await api('/api/upload',{method:'POST',body:fd});location.hash='meeting/'+r.meeting_id;}catch(e){notify(e.message,true)}finally{button.disabled=false}};
+async function meetings() {
+  const { meetings } = await api("/api/meetings");
+  $("#app").innerHTML =
+    `<div class="toolbar"><div><h1>${t("Кездесулер", "Совещания")}</h1><p class="muted">${t("Жазбадан тексерілген хаттамаға дейін", "От записи до проверенного протокола")}</p></div><span class="spacer"></span><button class="primary" id="new">+ ${t("Жазбаны жүктеу", "Загрузить запись")}</button></div><section class="panel">${meetings.length ? `<div class="table-wrap"><table><thead><tr><th>${t("Кездесу", "Совещание")}</th><th>${t("Күні", "Дата")}</th><th>${t("Күйі / кезеңі", "Статус / этап")}</th><th></th></tr></thead><tbody>${meetings.map((m) => `<tr><td><strong>${esc(m.metadata.title)}</strong><br><small>${esc(m.metadata.mode)} · ${esc(m.filename)}</small></td><td>${esc(m.metadata.meeting_at)}<br><small>${esc(m.metadata.timezone)}</small></td><td>${esc(m.status)}<br><small>${esc(stageName(m.stage))}</small>${m.error ? `<p class="notice error">${esc(m.error)}</p>` : ""}</td><td><button data-open="${m.id}">${t("Ашу", "Открыть")} →</button></td></tr>`).join("")}</tbody></table></div>` : `<div class="empty"><h2>${t("Әзірге кездесу жоқ", "Пока нет совещаний")}</h2><p>${t("WAV, MP3 немесе MP4 жүктеңіз. Нәтиже өңдеуден кейін пайда болады.", "Загрузите WAV, MP3 или MP4. Результат появится после обработки.")}</p></div>`}</section>`;
+  $("#new").onclick = () => (location.hash = "upload");
+  $$("[data-open]").forEach(
+    (b) => (b.onclick = () => (location.hash = "meeting/" + b.dataset.open)),
+  );
 }
 
-function stageName(s){return {queued:t('Кезекте','В очереди'),recovered:t('Қалпына келтірілді','Восстановлено'),decode:t('Аудионы тексеру','Проверка аудио'),transcribe:t('Сөйлеуді тану','Распознавание речи'),diarization_manual:t('Сөйлеушілерді қолмен белгілеу','Ручная разметка говорящих'),analyze:t('Талдау','Анализ'),review:t('Тексеруге дайын','Готово к проверке')}[s]||s;}
-async function openMeeting(id){
- const m=await api('/api/meetings/'+id);if(state.page!=='meeting/'+id)return;
- if(m.status==='done'||(m.status==='error'&&m.draft.transcript.length)){renderEditor(m);return;}
- $('#app').innerHTML=`<a class="button" href="#meetings">← ${t('Кездесулер','Совещания')}</a><section class="panel"><h1>${esc(m.metadata.title)}</h1><p>${t('Күйі','Статус')}: ${esc(m.status)}</p><div class="steps">${['queued','decode','transcribe','diarization_manual','analyze','review'].map(s=>`<span class="${m.stage===s?'current':''}">${esc(stageName(s))}</span>`).join('')}</div><p role="status">${esc(stageName(m.stage))}</p>${m.error?`<p class="notice error">${esc(m.error)}</p><button id="retry">${t('Қайта бастау','Повторить')}</button>`:`<p class="muted">${t('Бетті жабуға болады: жұмыс күйі сақталады.','Страницу можно закрыть: состояние задания сохраняется.')}</p>`}<ol class="events">${m.events.map(e=>`<li>${esc(e.ts)} · ${esc(stageName(e.action))}</li>`).join('')}</ol></section>`;
- if($('#retry'))$('#retry').onclick=async()=>{try{await api(`/api/meetings/${id}/retry`,json('POST',{revision:m.revision}));openMeeting(id);}catch(e){notify(e.message,true)}};
- if(['queued','processing'].includes(m.status))state.timer=setTimeout(()=>openMeeting(id).catch(e=>notify(e.message,true)),1500);
+async function upload() {
+  const h = await api("/api/health");
+  $("#app").innerHTML =
+    `<div class="upload"><h1>${t("Жаңа кездесу", "Новое совещание")}</h1><p class="muted">${t("Мерзімдер осы кездесудің күні бойынша есептеледі.", "Сроки рассчитываются относительно даты этого совещания.")}</p><form id="upload-form" class="panel"><div class="grid">
+ ${field(t("Атауы", "Название"), input("", 'name="title" required maxlength="200"'))}
+ ${field(t("Күні мен уақыты", "Дата и время"), input("", 'name="meeting_at" type="datetime-local" required'))}
+ ${field(t("Уақыт белдеуі (IANA)", "Часовой пояс (IANA)"), input("Asia/Qyzylorda", 'name="timezone" required'))}
+ ${field(t("Қатысушылар (үтір арқылы)", "Участники (через запятую)"), input("", 'name="participants"'))}
+ <div class="wide">${field(t("Жазба — WAV / MP3 / MP4", "Запись — WAV / MP3 / MP4"), '<input type="file" name="file" accept=".wav,.mp3,.mp4" required>')}<small>${t("Ең үлкен көлем", "Максимальный размер")}: ${h.max_upload_mb} MB</small></div>
+ ${field(t("Өңдеу режимі", "Режим обработки"), `<select name="mode"><option value="LOCAL">LOCAL — ${t("жергілікті LLM", "локальный LLM")}</option><option value="RULES">RULES — ${t("шектеулі ережелер", "ограниченные правила")}</option><option value="HYBRID">HYBRID — ${t("сыртқы LLM", "внешний LLM")}</option></select>`)}
+ </div><p id="mode-info" class="notice"></p><label class="check" id="consent-label" hidden><input type="checkbox" name="consent">${t("Транскрипттің сыртқы API-ге жіберілуіне келісемін. Аудио жергілікті қалады.", "Разрешаю отправку транскрипта внешнему API. Аудио остаётся локальным.")}</label>
+ ${!h.model_available ? `<p class="notice">${t("ASR моделі орнатылмаған. Жүктелген жазба үшін нақты қате көрсетіледі; модельді бөлек орнатыңыз.", "Модель ASR не установлена. Обработка покажет конкретную ошибку; установите модель отдельно.")}</p>` : ""}
+ ${!h.ffmpeg_available ? `<p class="notice">${t("FFmpeg табылмады. Баптауларды қараңыз.", "FFmpeg не найден. См. настройки.")}</p>` : ""}
+ <div class="toolbar"><button class="primary" type="submit">${t("Жүктеу және өңдеу", "Загрузить и обработать")}</button><a class="button" href="#meetings">${t("Артқа", "Назад")}</a></div></form></div>`;
+  const form = $("#upload-form");
+  const modeInfo = () => {
+    const mode = form.elements.mode.value;
+    $("#consent-label").hidden = mode !== "HYBRID";
+    form.elements.consent.required = mode === "HYBRID";
+    $("#mode-info").textContent =
+      mode === "LOCAL"
+        ? t(
+            "LOCAL: аудио мен транскрипт осы компьютерде өңделеді. Жергілікті LLM endpoint қажет.",
+            "LOCAL: аудио и транскрипт обрабатываются на этом компьютере. Нужен локальный LLM endpoint.",
+          )
+        : mode === "RULES"
+          ? t(
+              "RULES: желісіз жұмыс істейтін шектеулі извлекатель. Барлық нәтижені адам тексереді.",
+              "RULES: ограниченный локальный извлекатель. Все результаты требуют проверки человеком.",
+            )
+          : t(
+              `HYBRID: транскрипт ${h.hybrid_endpoint || "бапталмаған API"} қызметіне жіберіледі. Бұл жабық контур емес.`,
+              `HYBRID: транскрипт отправляется в ${h.hybrid_endpoint || "не настроенный API"}. Это не закрытый контур.`,
+            );
+  };
+  form.elements.mode.onchange = modeInfo;
+  modeInfo();
+  form.onsubmit = async (e) => {
+    e.preventDefault();
+    const button = form.querySelector("button[type=submit]");
+    button.disabled = true;
+    try {
+      const file = form.elements.file.files[0];
+      if (file.size > h.max_upload_mb * 1024 * 1024)
+        throw Error(t("Файл тым үлкен", "Файл слишком большой"));
+      const fd = new FormData();
+      fd.append("file", file);
+      fd.append(
+        "metadata",
+        JSON.stringify({
+          title: form.elements.title.value,
+          meeting_at: form.elements.meeting_at.value,
+          timezone: form.elements.timezone.value,
+          participants: form.elements.participants.value
+            .split(",")
+            .map((s) => s.trim())
+            .filter(Boolean),
+          mode: form.elements.mode.value,
+          hybrid_consent: form.elements.consent.checked,
+        }),
+      );
+      const r = await api("/api/upload", { method: "POST", body: fd });
+      location.hash = "meeting/" + r.meeting_id;
+    } catch (e) {
+      notify(e.message, true);
+    } finally {
+      button.disabled = false;
+    }
+  };
 }
 
-async function tasks(){const {assignments}=await api('/api/assignments');$('#app').innerHTML=`<h1>${t('Тапсырмалар тізілімі','Реестр поручений')}</h1><p class="muted">${t('Мерзімі жоқ тапсырмалар кешіккен деп саналмайды.','Поручения без срока не считаются просроченными.')}</p><section class="panel"><div class="toolbar">${field(t('Сүзгі','Фильтр'),`<select id="filter"><option value="all">${t('Барлығы','Все')}</option><option value="overdue">${t('Кешіккен','Просрочено')}</option><option value="open">open</option><option value="in_progress">in_progress</option><option value="done">done</option><option value="cancelled">cancelled</option></select>`)}</div><div id="register"></div></section>`;const render=()=>{const filter=$('#filter').value;const rows=assignments.filter(a=>filter==='all'||(filter==='overdue'?a.overdue:a.status===filter));$('#register').innerHTML=rows.length?`<div class="table-wrap"><table><thead><tr><th>${t('Тапсырма / кездесу','Поручение / совещание')}</th><th>${t('Орындаушы','Исполнитель')}</th><th>${t('Мерзім','Срок')}</th><th>${t('Күйі','Статус')}</th><th></th></tr></thead><tbody>${rows.map(a=>`<tr><td>${esc(a.action)}<br><small>${esc(a.title)}</small></td><td>${esc(a.owner||'—')}</td><td>${esc(a.deadline||a.deadline_raw||'—')}${a.overdue?`<br><span class="notice">${t('Кешіккен','Просрочено')}</span>`:''}</td><td>${esc(a.status)}<br><small>${esc(a.review)}</small></td><td><a class="button" href="#meeting/${a.meeting_id}">${t('Тексеру / өзгерту','Проверить / изменить')}</a></td></tr>`).join('')}</tbody></table></div>`:`<p class="empty">${t('Тапсырмалар табылмады','Поручения не найдены')}</p>`;};$('#filter').onchange=render;render();}
+function stageName(s) {
+  return (
+    {
+      queued: t("Кезекте", "В очереди"),
+      recovered: t("Қалпына келтірілді", "Восстановлено"),
+      decode: t("Аудионы тексеру", "Проверка аудио"),
+      transcribe: t("Сөйлеуді тану", "Распознавание речи"),
+      diarization_manual: t(
+        "Сөйлеушілерді қолмен белгілеу",
+        "Ручная разметка говорящих",
+      ),
+      analyze: t("Талдау", "Анализ"),
+      review: t("Тексеруге дайын", "Готово к проверке"),
+    }[s] || s
+  );
+}
+async function openMeeting(id) {
+  const m = await api("/api/meetings/" + id);
+  if (state.page !== "meeting/" + id) return;
+  if (
+    m.status === "done" ||
+    (m.status === "error" && m.draft.transcript.length)
+  ) {
+    renderEditor(m);
+    return;
+  }
+  $("#app").innerHTML =
+    `<a class="button" href="#meetings">← ${t("Кездесулер", "Совещания")}</a><section class="panel"><h1>${esc(m.metadata.title)}</h1><p>${t("Күйі", "Статус")}: ${esc(m.status)}</p><div class="steps">${["queued", "decode", "transcribe", "diarization_manual", "analyze", "review"].map((s) => `<span class="${m.stage === s ? "current" : ""}">${esc(stageName(s))}</span>`).join("")}</div><p role="status">${esc(stageName(m.stage))}</p>${m.error ? `<p class="notice error">${esc(m.error)}</p><button id="retry">${t("Қайта бастау", "Повторить")}</button>` : `<p class="muted">${t("Бетті жабуға болады: жұмыс күйі сақталады.", "Страницу можно закрыть: состояние задания сохраняется.")}</p>`}<ol class="events">${m.events.map((e) => `<li>${esc(e.ts)} · ${esc(stageName(e.action))}</li>`).join("")}</ol></section>`;
+  if ($("#retry"))
+    $("#retry").onclick = async () => {
+      try {
+        await api(
+          `/api/meetings/${id}/retry`,
+          json("POST", { revision: m.revision }),
+        );
+        openMeeting(id);
+      } catch (e) {
+        notify(e.message, true);
+      }
+    };
+  if (["queued", "processing"].includes(m.status))
+    state.timer = setTimeout(
+      () => openMeeting(id).catch((e) => notify(e.message, true)),
+      1500,
+    );
+}
 
-async function settings(){const h=await api('/api/health');$('#app').innerHTML=`<h1>${t('Баптаулар','Настройки')}</h1><section class="panel"><h2>${t('Жергілікті өңдеу','Локальная обработка')}</h2><p>LOCAL · ${esc(h.local_endpoint)}</p><p>ASR: ${h.model_available?t('Модель бар','Модель найдена'):t('Модель жоқ','Модель отсутствует')} · FFmpeg: ${h.ffmpeg_available?'OK':t('Жоқ','Отсутствует')}</p><p>${t('Модельдер бөлек жүктеледі. Өңдеу кезінде жүктеу және сыртқы API-ге автоматты ауысу жоқ.','Модели загружаются отдельно. Во время обработки нет скачивания и автоматического переключения на внешний API.')}</p><p>${t('Провайдерлер мен кілттер сервердегі backend/.env арқылы бапталады.','Провайдеры и ключи настраиваются на сервере в backend/.env.')}</p><h2>HYBRID</h2><p>${esc(h.hybrid_endpoint||t('Бапталмаған','Не настроен'))}</p><p>${t('Тек жүктеу формасындағы айқын келісіммен: транскрипт сыртқа жіберіледі, аудио осы компьютерде қалады.','Только с явным согласием в форме загрузки: транскрипт отправляется наружу, аудио остаётся на компьютере.')}</p><h2>${t('Шектеулер','Ограничения')}</h2><p>${t('Автоматты диаризация қосылмаған; сөйлеушілер қолмен белгіленеді. Аутентификациясыз интернетке жарияламаңыз.','Автоматическая диаризация не подключена; говорящие назначаются вручную. Не публикуйте в интернете без аутентификации.')}</p></section>`;}
+async function tasks() {
+  const { assignments } = await api("/api/assignments");
+  $("#app").innerHTML =
+    `<h1>${t("Тапсырмалар тізілімі", "Реестр поручений")}</h1><p class="muted">${t("Мерзімі жоқ тапсырмалар кешіккен деп саналмайды.", "Поручения без срока не считаются просроченными.")}</p><section class="panel"><div class="toolbar">${field(t("Сүзгі", "Фильтр"), `<select id="filter"><option value="all">${t("Барлығы", "Все")}</option><option value="overdue">${t("Кешіккен", "Просрочено")}</option><option value="open">open</option><option value="in_progress">in_progress</option><option value="done">done</option><option value="cancelled">cancelled</option></select>`)}</div><div id="register"></div></section>`;
+  const render = () => {
+    const filter = $("#filter").value;
+    const rows = assignments.filter(
+      (a) =>
+        filter === "all" ||
+        (filter === "overdue" ? a.overdue : a.status === filter),
+    );
+    $("#register").innerHTML = rows.length
+      ? `<div class="table-wrap"><table><thead><tr><th>${t("Тапсырма / кездесу", "Поручение / совещание")}</th><th>${t("Орындаушы", "Исполнитель")}</th><th>${t("Мерзім", "Срок")}</th><th>${t("Күйі", "Статус")}</th><th></th></tr></thead><tbody>${rows.map((a) => `<tr><td>${esc(a.action)}<br><small>${esc(a.title)}</small></td><td>${esc(a.owner || "—")}</td><td>${esc(a.deadline || a.deadline_raw || "—")}${a.overdue ? `<br><span class="notice">${t("Кешіккен", "Просрочено")}</span>` : ""}</td><td>${esc(a.status)}<br><small>${esc(a.review)}</small></td><td><a class="button" href="#meeting/${a.meeting_id}">${t("Тексеру / өзгерту", "Проверить / изменить")}</a></td></tr>`).join("")}</tbody></table></div>`
+      : `<p class="empty">${t("Тапсырмалар табылмады", "Поручения не найдены")}</p>`;
+  };
+  $("#filter").onchange = render;
+  render();
+}
 
-async function route(){clearTimeout(state.timer);if(state.dirty){notify(t('Сақталмаған өзгерістер бар. Алдымен сақтаңыз.','Есть несохранённые изменения. Сначала сохраните их.'),true);history.replaceState(null,'','#meeting/'+state.meeting.id);return;}state.page=location.hash.slice(1)||'meetings';navigation();notify('');try{if(state.page==='upload')await upload();else if(state.page.startsWith('meeting/'))await openMeeting(state.page.split('/')[1]);else if(state.page==='tasks')await tasks();else if(state.page==='settings')await settings();else await meetings();}catch(e){notify(e.message,true)}}
-$('#locale').onclick=()=>{state.locale=state.locale==='kk'?'ru':'kk';localStorage.setItem('khattama-locale',state.locale);navigation();if(state.page.startsWith('meeting/')&&state.draft){const dirty=state.dirty;const draft=state.draft;renderEditor({...state.meeting,draft});state.dirty=dirty;}else route();};
-window.addEventListener('hashchange',route);
-window.addEventListener('beforeunload',e=>{if(state.dirty){e.preventDefault();e.returnValue='';}});
+async function settings() {
+  const h = await api("/api/health");
+  $("#app").innerHTML =
+    `<h1>${t("Баптаулар", "Настройки")}</h1><section class="panel"><h2>${t("Жергілікті өңдеу", "Локальная обработка")}</h2><p>LOCAL · ${esc(h.local_endpoint)}</p><p>ASR: ${h.model_available ? t("Модель бар", "Модель найдена") : t("Модель жоқ", "Модель отсутствует")} · FFmpeg: ${h.ffmpeg_available ? "OK" : t("Жоқ", "Отсутствует")}</p><p>${t("Модельдер бөлек жүктеледі. Өңдеу кезінде жүктеу және сыртқы API-ге автоматты ауысу жоқ.", "Модели загружаются отдельно. Во время обработки нет скачивания и автоматического переключения на внешний API.")}</p><p>${t("Провайдерлер мен кілттер сервердегі backend/.env арқылы бапталады.", "Провайдеры и ключи настраиваются на сервере в backend/.env.")}</p><h2>HYBRID</h2><p>${esc(h.hybrid_endpoint || t("Бапталмаған", "Не настроен"))}</p><p>${t("Тек жүктеу формасындағы айқын келісіммен: транскрипт сыртқа жіберіледі, аудио осы компьютерде қалады.", "Только с явным согласием в форме загрузки: транскрипт отправляется наружу, аудио остаётся на компьютере.")}</p><h2>${t("Шектеулер", "Ограничения")}</h2><p>${t("Автоматты диаризация қосылмаған; сөйлеушілер қолмен белгіленеді. Аутентификациясыз интернетке жарияламаңыз.", "Автоматическая диаризация не подключена; говорящие назначаются вручную. Не публикуйте в интернете без аутентификации.")}</p></section>`;
+}
+
+async function route() {
+  clearTimeout(state.timer);
+  if (state.dirty) {
+    notify(
+      t(
+        "Сақталмаған өзгерістер бар. Алдымен сақтаңыз.",
+        "Есть несохранённые изменения. Сначала сохраните их.",
+      ),
+      true,
+    );
+    history.replaceState(null, "", "#meeting/" + state.meeting.id);
+    return;
+  }
+  state.page = location.hash.slice(1) || "meetings";
+  navigation();
+  notify("");
+  try {
+    if (state.page === "upload") await upload();
+    else if (state.page.startsWith("meeting/"))
+      await openMeeting(state.page.split("/")[1]);
+    else if (state.page === "tasks") await tasks();
+    else if (state.page === "settings") await settings();
+    else await meetings();
+  } catch (e) {
+    notify(e.message, true);
+  }
+}
+$("#locale").onclick = () => {
+  state.locale = state.locale === "kk" ? "ru" : "kk";
+  localStorage.setItem("khattama-locale", state.locale);
+  navigation();
+  if (state.page.startsWith("meeting/") && state.draft) {
+    const dirty = state.dirty;
+    const draft = state.draft;
+    renderEditor({ ...state.meeting, draft });
+    state.dirty = dirty;
+  } else route();
+};
+window.addEventListener("hashchange", route);
+window.addEventListener("beforeunload", (e) => {
+  if (state.dirty) {
+    e.preventDefault();
+    e.returnValue = "";
+  }
+});
 route();
