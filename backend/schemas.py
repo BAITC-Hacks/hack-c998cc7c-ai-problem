@@ -132,16 +132,15 @@ def _collapse(value):
 def evidence_in_transcript(evidence, segments, lookup, tolerance=0.5):
     """Ground a piece of evidence in the transcript.
 
-    A quote can span adjacent segments, but only those needed to cover its
-    stated times. Never widen the search merely to find the supplied text:
-    that could validate a real quote at an unrelated playback position.
+    Times describe whole segments, not guessed word-level timestamps. The
+    anchor must be the first segment actually quoted; a spanning quote must
+    also reach the final segment, without skipping any intervening text.
     """
     anchor = lookup.get(evidence.segment_id)
     if anchor is None:
         return False
     if (evidence.end < evidence.start
-            or evidence.end < anchor.start - tolerance
-            or evidence.start > anchor.end + tolerance):
+            or abs(evidence.start - anchor.start) > tolerance):
         return False
     quote = _collapse(evidence.quote)
     if not quote:
@@ -151,13 +150,18 @@ def evidence_in_transcript(evidence, segments, lookup, tolerance=0.5):
     )
     if idx is None:
         return False
-    lo = hi = idx
-    while lo > 0 and evidence.start < segments[lo].start - tolerance:
-        lo -= 1
-    while hi + 1 < len(segments) and evidence.end > segments[hi].end + tolerance:
-        hi += 1
-    if (evidence.start < segments[lo].start - tolerance
-            or evidence.end > segments[hi].end + tolerance):
-        return False
-    window = " ".join(_collapse(s.text) for s in segments[lo:hi + 1])
-    return quote in window
+    window = ""
+    first_length = len(_collapse(anchor.text))
+    for segment in segments[idx:]:
+        if segment.end > evidence.end + tolerance:
+            break
+        last_start = len(window) + (1 if window else 0)
+        window += (" " if window else "") + _collapse(segment.text)
+        if abs(evidence.end - segment.end) > tolerance:
+            continue
+        position = window.find(quote)
+        while 0 <= position < first_length:
+            if position + len(quote) > last_start:
+                return True
+            position = window.find(quote, position + 1)
+    return False

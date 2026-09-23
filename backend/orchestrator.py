@@ -94,6 +94,8 @@ def process(m):
                 raise ProcessingError(
                     "NO_SPEECH: no speech recognized; no minutes were generated"
                 )
+            # Preserve paid ASR before any subsequent processing can fail.
+            db.stage(mid, "transcribe", [s.model_dump() for s in segments])
             segments = diarize(
                 metadata.mode, segments, normalized,
                 lambda stage: db.stage(mid, stage),
