@@ -1,86 +1,105 @@
-"""Агентный оркестратор: запускает этапы, проксирует статусы, хранит результат."""
-from __future__ import annotations
-
+"""A durable single-worker queue, with OS process lock and checkpoint recovery."""
+import os
 import threading
-import traceback
-from datetime import datetime
+import wave
 from pathlib import Path
-
+import subprocess
 import config
 import db
-from agents.align import diarize
-from agents.export import build_text_protocol
-from agents.extract import extract_assignments
-from agents.summarize import summarize
 from agents.transcribe import transcribe_audio
-from faster_whisper.audio import decode_audio
-from llm_client import get_llm, LLM_STATUS
+from diarization import ManualDiarizer
+from llm_client import ProcessingError, analyze
+from schemas import Draft, Metadata, Segment
 
-STAGES = [
-    ("transcribe", "Распознавание речи (локально)"),
-    ("diarize", "Диаризация говорящих"),
-    ("extract", "Извлечение поручений"),
-    ("summarize", "Саммари"),
-    ("export", "Экспорт протокола"),
-]
+_stop = threading.Event()
+_thread = None
+_lock_file = None
 
-_threads: dict[int, threading.Thread] = {}
+def decode(path, output):
+    """FFmpeg is called with an argument vector, bounded time/duration and no network protocols."""
+    tmp = output.with_suffix('.partial.wav')
+    try:
+        result = subprocess.run([config.FFMPEG,'-nostdin','-hide_banner','-loglevel','error','-y',
+            '-protocol_whitelist','file,pipe','-i',str(path),'-map','0:a:0','-vn','-ac','1','-ar','16000',
+            '-t',str(config.MAX_AUDIO_SECONDS + 1),'-f','wav',str(tmp)],capture_output=True,timeout=600,
+            creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
+        if result.returncode:
+            raise ProcessingError('AUDIO_DECODE_FAILED: invalid media or no audio stream')
+        with wave.open(str(tmp),'rb') as wav:
+            seconds = wav.getnframes()/wav.getframerate()
+            if seconds <= 0 or seconds > config.MAX_AUDIO_SECONDS:
+                raise ProcessingError('AUDIO_DURATION_LIMIT: empty audio or recording longer than configured maximum')
+        tmp.replace(output)
+    except FileNotFoundError:
+        raise ProcessingError('FFMPEG_MISSING: install FFmpeg and configure FFMPEG in backend/.env') from None
+    except subprocess.TimeoutExpired:
+        raise ProcessingError('AUDIO_DECODE_TIMEOUT: FFmpeg exceeded 600 seconds') from None
+    finally:
+        tmp.unlink(missing_ok=True)
 
-
-def run_pipeline(meeting_id: int, file_path: str) -> None:
-    def worker():
-        try:
-            db.set_stage(meeting_id, "processing", "transcribe")
-            db.log_event(meeting_id, "transcribe", "Запущено распознавание речи моделью Whisper")
-            segments = transcribe_audio(file_path)
+def process(m):
+    mid = m['id']
+    try:
+        if m['checkpoint'] is not None:
+            segments = [Segment.model_validate(s) for s in m['checkpoint']]
+        else:
+            db.stage(mid,'decode')
+            normalized = Path(m['path']).with_suffix('.decoded.wav')
+            decode(m['path'],normalized)
+            db.stage(mid,'transcribe')
+            segments = transcribe_audio(normalized)
             if not segments:
-                db.fail_meeting(meeting_id, "Не удалось распознать речь")
-                return
-            db.log_event(meeting_id, "transcribe",
-                         f"Распознано сегментов: {len(segments)}")
-            db.set_stage(meeting_id, "processing", "diarize")
-            waveform = decode_audio(file_path, sampling_rate=16000)
-            blocks = diarize(segments, waveform)
-            db.log_event(meeting_id, "diarize",
-                         f"Говорящих: {len({b['speaker'] for b in blocks})}")
-            db.set_stage(meeting_id, "processing", "extract")
+                raise ProcessingError('NO_SPEECH: no speech recognized; no minutes were generated')
+            db.stage(mid,'diarization_manual', [s.model_dump() for s in segments])
+            segments = ManualDiarizer().assign(str(normalized),segments)
+        db.stage(mid,'analyze')
+        result = analyze(segments,Metadata.model_validate(m['metadata']),lambda stage:db.stage(mid,stage))
+        draft = Draft(**result.model_dump(),transcript=segments)
+        db.finish(mid,draft.model_dump(mode='json'),bool(m['analysis_only']))
+    except ProcessingError as e:
+        db.fail(mid,str(e))
+    except Exception:
+        # Never persist remote response bodies, credentials or full transcripts in error logs.
+        db.fail(mid,'PROCESSING_FAILED: internal processing error; inspect installation and retry')
 
-            llm = get_llm()
-            ex = extract_assignments(blocks, llm)
-            db.log_event(meeting_id, "extract",
-                         f"Поручений: {len(ex['assignments'])} (источник: {ex['mode']})")
-            db.set_stage(meeting_id, "processing", "summarize")
-            su = summarize(blocks, ex["assignments"], llm)
-            db.log_event(meeting_id, "summarize", f"Пунктов саммари: {len(su['summary'])}")
+def loop():
+    while not _stop.is_set():
+        m = db.claim()
+        if m:
+            process(m)
+        else:
+            _stop.wait(1)
 
-            meeting = {
-                "filename": file_path.split("/")[-1],
-                "created_at": datetime.now().isoformat(timespec="seconds"),
-                "transcript": blocks,
-                "assignments": ex["assignments"],
-                "summary": su["summary"],
-            }
-            # текстовый протокол для скачивания
-            proto_path = Path(config.OUTPUT_DIR) / f"{meeting_id}_protocol.txt"
-            proto_path.write_text(build_text_protocol(meeting), encoding="utf-8")
+def start():
+    global _thread,_lock_file
+    lock = open(config.DATA_DIR / 'worker.lock','a+b')
+    try:
+        lock.seek(0)
+        if os.name == 'nt':
+            import msvcrt
+            if lock.read(1) == b'':
+                lock.write(b'0'); lock.flush()
+            lock.seek(0)
+            msvcrt.locking(lock.fileno(),msvcrt.LK_NBLCK,1)
+        else:
+            import fcntl
+            fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+    except OSError:
+        lock.close()
+        return False
+    _lock_file = lock
+    db.recover()
+    _stop.clear()
+    _thread = threading.Thread(target=loop,daemon=True,name='khattama-worker')
+    _thread.start()
+    return True
 
-            db.set_stage(meeting_id, "done", "export")
-            db.finish_meeting(meeting_id, meeting, ex["mode"], su["mode"])
-            db.log_event(meeting_id, "export", "Протокол сформирован и сохранён")
-        except Exception as e:
-            traceback.print_exc()
-            db.log_event(meeting_id, "error", str(e)[:1000])
-            db.fail_meeting(meeting_id, str(e))
-
-    t = threading.Thread(target=worker, daemon=True, name=f"meeting-{meeting_id}")
-    _threads[meeting_id] = t
-    t.start()
-
-
-def llm_status() -> dict:
-    p = LLM_STATUS["provider"]
-    return {
-        "provider": p,
-        "detail": LLM_STATUS["detail"],
-        "available": p != "none",
-    }
+def stop():
+    global _lock_file
+    _stop.set()
+    if _thread:
+        _thread.join(timeout=2)
+    # Keep lock held if a job is still running. Process exit releases it safely.
+    if _lock_file and (not _thread or not _thread.is_alive()):
+        _lock_file.close()
+        _lock_file = None

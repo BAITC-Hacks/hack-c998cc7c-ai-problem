@@ -1,193 +1,67 @@
-"""Извлечение поручений из транскрипта.
-
-Режимы:
-  * LLM (OpenAI/NVIDIA) — структурный JSON по схеме; качественный анализ
-    смешанной русско-казахской речи, сроков и ответственных.
-  * Fallback (без сети) — детерминированные правила: маркеры глаголов,
-    имена собственные, регулярные выражения сроков.
-
-После извлечения каждый срок нормализуется (date_parser), а ответственный
-привязывается к конкретному говорящему из диаризации (по имени в репликах).
-"""
-from __future__ import annotations
-
-import json
+"""Conservative local extractor; unsupported forms remain review questions."""
 import re
 from datetime import date
+from schemas import Analysis, Assignment, Evidence, Segment, Statement
+from date_parser import normalize_deadline, WEEKDAYS
 
-from date_parser import normalize_deadline
+COMMAND = re.compile(r'\b(поручаю|поручить|подготовь\w*|направь\w*|составь\w*|сделай\w*|предоставь\w*|необходимо|дайында\w*|әзірле\w*|жібер\w*|тапсырамын)\b', re.I)
+PROPOSAL = re.compile(r'\b(предлагаю|может быть|может,|давайте обсудим|ұсынамын|ұсыныс)\b', re.I)
+CHANGE = re.compile(r'\b(перенес\w*|перенос\w*|ауыстыр\w*)\b', re.I)
+CANCEL = re.compile(r'\b(отменя\w*|отменить|күшін жо\w*)\b', re.I)
+DEADLINE = re.compile(r'(?:к|до|на|не позднее)\s+(?:понедельн\w*|вторн\w*|сред\w*|четверг\w*|пятниц\w*|суббот\w*|воскрес\w*|конца\s+\w+|\d{1,2}[./]\d{1,2}(?:[./]\d{4})?)|\d{4}-\d{2}-\d{2}|(?:через|спустя)\s+(?:\d+|два|две|три|четыре|пять)\s+д\w+|(?:послезавтра|завтра|сегодня|ертең|бүгін|бүрсігүні)|(?:дүйсенбі|сейсенбі|сәрсенбі|бейсенбі|жұма|сенбі|жексенбі)\w*(?:\s+дейін)?|(?:бір|екі|үш|\d+)\s+күн(?:нен)?\s+кейін|(?:осы|келесі)\s+апта\w*',re.I)
 
-# маркеры поручений (рус + каз): «подготовить», «Қамтамасыз ету» и т.п.
-_TASK_VERBS = [
-    r"подготовить", r"подготовь", r"подготовит", r"подготовл",
-    r"разработать", r"разрработ", r"обеспечить", r"предоставить", r"предостав",
-    r"направить", r"направ", r"провести", r"провед", r"организовать", r"организу",
-    r"согласовать", r"согласу", r"прошу подготовить", r"нужно?(| сопровождать)",
-    r"изуч\w+ и", r"довести", r"актуализировать", r"актуализироват",
-    r"внести", r"подготову", r"сверстать", r"сверста",
-    r"составить", r"проработать", r"уточнить", r"уточн",
-    r"направить", r"передать", r"передач",
-    r"қамтамасыз ет\w*", r"дайында\w*", r"жібер\w*", r"анықта\w*",
-    r"ұйымдастыр\w*", r"ұсын\w*", r"әзірле\w*",
-    r"тапсырма\w*", r"орындау\w*", r"жоспар\w*"
-]
-_TASK_RE = re.compile(r"\b(" + "|".join(_TASK_VERBS) + r")\b", re.I)
+def evidence(s: Segment, quote=None):
+    return Evidence(segment_id=s.id,quote=quote or s.text,start=s.start,end=s.end)
 
-# имена собственные (кириллица + каз. буквы), Капит_{a-z+й..}
-_NAME_RE = re.compile(
-    r"(?<![а-яёқғңүұәіөһa-z])[А-ЯЁҚҒҢҮҰӘІӨҺ][а-яёқғңүұәіөһ]{2,}\b")
-
-_PRIORITY_RE = re.compile(r"\b(срочно|важно|безотлагательно|первоочередн|в первую очередь|мақсат|шұғыл)\b", re.I)
-
-
-def _sentences(text: str) -> list[str]:
-    return [s.strip() for s in re.split(r"[.!?]+\s*|\n+", text) if len(s.strip()) > 3]
-
-
-def _first_capitals(text: str) -> list[str]:
-    return [m.group(0) for m in _NAME_RE.finditer(text)]
-
-
-# ---------------------------------------------------------------- привязка
-def bind_owner_to_speaker(owner: str, blocks: list[dict]) -> dict | None:
-    """Ищет имя ответственного в репликах говорящих → speaker_id/label."""
-    if not owner:
-        return None
-    tokens = [w for w in re.split(r"\W+", owner) if len(w) >= 3]
-    if not tokens:
-        return None
-    scores: dict[str, int] = {}
-    for b in blocks:
-        low = b["text"].lower()
-        hits = sum(1 for t in tokens if t.lower() in low)
-        if hits:
-            scores[b["speaker"]] = max(scores.get(b["speaker"], 0), hits)
-    if not scores:
-        return None
-    best = max(scores, key=scores.get)
-    idx = next((bl["speaker_idx"] for bl in blocks if bl["speaker"] == best), None)
-    return {"speaker_id": idx, "speaker_label": best}
-
-
-def _perform_bind(owner: str, blocks: list[dict]) -> dict:
-    b = bind_owner_to_speaker(owner, blocks)
-    return {
-        "speaker_label": b["speaker_label"] if b else None,
-        "speaker_id": b["speaker_id"] if b else None,
-    }
-
-
-# ---------------------------------------------------------------- LLM-путь
-_LLM_SYSTEM = """Ты — модуль автоматического протоколирования совещаний.
-По размеченному транскрипту найди ПОРУЧЕНИЯ: задачи, которые поручены конкретному
-человеку или отделу, с указанием срока. Работает русский, казахский и смешанная
-(«шала-казах») речь.
-
-Верни ТОЛЬКО JSON без пояснений в формате:
-{"assignments": [
-  {"task": "суть поручения одним предложением (язык оригинала)",
-   "owner": "кому поручено (ФИО/должность/отдел) или null",
-   "deadline_raw": "формулировка срока как в записи или null",
-   "priority": "high|medium|low",
-   "speaker_label": "метка говорящего из транскрипта (Говорящий N), если понятно, кто отвечает, иначе null"}
-]}
-Не выдумывай поручения, которых нет в транскрипте."""
-
-
-def _validate(p: dict) -> bool:
-    return isinstance(p.get("assignments"), list) and all(
-        isinstance(a, dict) and isinstance(a.get("task"), str) and a["task"]
-        for a in p["assignments"])
-
-
-def extract_assignments_llm(blocks: list[dict], llm) -> list[dict]:
-    lines = []
-    for b in blocks:
-        lines.append(f"[{b['speaker']}] {b['text']}")
-    transcript = "\n".join(lines)
-    parsed = llm.chat_json(
-        _LLM_SYSTEM,
-        f"Транскрипт совещания:\n{transcript}",
-        validator=_validate,
-    )
-    out = []
-    for a in parsed["assignments"]:
-        task = str(a.get("task", "")).strip()
-        if len(task) < 5:
-            continue
-        owner_raw = str(a.get("owner") or "").strip()
-        dl_raw = str(a.get("deadline_raw") or "").strip()
-        iso = normalize_deadline(dl_raw) if dl_raw else None
-        priority = str(a.get("priority", "medium")).lower()
-        if priority not in ("high", "medium", "low"):
-            priority = "medium"
-        bind = _perform_bind(owner_raw, blocks) if owner_raw else {}
-        out.append({
-            "task": task,
-            "owner": owner_raw or None,
-            "deadline_raw": dl_raw or None,
-            "deadline": iso,
-            "priority": priority,
-            "speaker_label": bind.get("speaker_label") or (str(a.get("speaker_label") or "") or None),
-            "speaker_id": bind.get("speaker_id"),
-            "source": "llm",
-        })
-    return out
-
-
-# ------------------------------------------------------ Fallback (правила)
-def extract_assignments_rules(blocks: list[dict]) -> list[dict]:
-    out: list[dict] = []
-    for b in blocks:
-        cands = [s for s in _sentences(b["text"]) if _TASK_RE.search(s)]
-        for s in cands:
-            owner = None
-            capitals = _first_capitals(s)
-            if capitals:
-                # приоритет именам рядом с «поручаю/ответственн/прошу»
-                owner = _name_near_marker(s) or capitals[0]
-            dl_raw = _deadline_in_block(b["text"], s)
-            task = re.sub(r"\s+", " ", s).strip()
-            priority = "high" if _PRIORITY_RE.search(task) else "medium"
-            bind = _perform_bind(owner, [b]) if owner else {}
-            out.append({
-                "task": task,
-                "owner": owner,
-                "deadline_raw": dl_raw,
-                "deadline": normalize_deadline(dl_raw) if dl_raw else None,
-                "priority": priority,
-                "speaker_label": bind.get("speaker_label") or b["speaker"],
-                "speaker_id": bind.get("speaker_id") if bind else b["speaker_idx"],
-                "source": "rules",
-            })
-    return out
-
-
-_MARKER_RE = re.compile(
-    r"(?i:поручаю|поручается|поручаем|ответственн|прошу|беру на себя|принимает|"
-    r"жауапты|тапсырамын)\s*(?::|\s+)?\s*"
-    r"([А-ЯЁҚҒҢҮҰӘІӨҺ][а-яёқғңүұәіөһ]*(?:\s+[А-ЯЁҚҒҢҮҰӘІӨҺ][а-яёқғңүұәіөһ]*)?)")
-
-
-def _name_near_marker(text: str) -> str | None:
-    m = _MARKER_RE.search(text)
-    return m.group(1).strip() if m else None
-
-
-def _deadline_in_block(block_text: str, sentence: str) -> str | None:
-    cands = [sentence] + [s for s in _sentences(block_text) if s != sentence][:2]
-    for s in cands:
-        if re.search(r"\b(?:к|до|в течение|через|завтра|послезавтра|срок|конц|пятниц|жұма|сіз)"
-                     r"|\b\d{1,2}[./]\d", s, re.I):
-            return s
-    return None
-
-
-def extract_assignments(blocks: list[dict], llm) -> dict:
-    """Возвращает {'assignments': [...], 'mode': 'llm'|'rules'}."""
-    if llm.available:
-        try:
-            return {"assignments": extract_assignments_llm(blocks, llm), "mode": "llm"}
-        except Exception as e:  # LLM недоступен/ошибка → правила
-            print(f"[extract] LLM недоступен, fallback rules: {e}")
-    return {"assignments": extract_assignments_rules(blocks), "mode": "rules"}
+def extract_rules(segments: list[Segment], ref: date) -> Analysis:
+    result = Analysis()
+    last = None
+    for s in segments:
+        # Keep punctuation in source; quotes are exact substrings.
+        clauses = [x.strip() for x in re.split(r'(?<=[.!?])\s+',s.text) if x.strip()]
+        for clause in clauses:
+            ev = evidence(s,clause)
+            if PROPOSAL.search(clause):
+                result.decisions.append(Statement(text=clause,kind='proposal',evidence=[ev]))
+                last = None
+                continue
+            if CHANGE.search(clause) or CANCEL.search(clause):
+                # Only an adjacent anaphoric correction with one active context is safe.
+                addressed = re.match(r'^([А-ЯӘҒҚҢӨҰҮҺІ][а-яәғқңөұүһі]+),',clause)
+                if last is not None and (not addressed or addressed[1].lower() in ('жоқ','нет')):
+                    last.evidence.append(ev)
+                    if CANCEL.search(clause):
+                        last.status = 'cancelled'
+                    else:
+                        hits = list(DEADLINE.finditer(clause))
+                        last.deadline_raw = hits[-1][0] if hits else clause
+                        normalized = normalize_deadline(last.deadline_raw,ref)
+                        last.deadline = date.fromisoformat(normalized) if normalized else None
+                        last.uncertainty.append('changed_deadline_requires_review')
+                    continue
+                result.questions.append(clause)
+                last = None
+                continue
+            if COMMAND.search(clause) and not re.search(r'\bне\s+(?:нужно|надо|подготов|направ)|не\s+поручаю|керек емес|дайындама|әзірлеме|жіберме',clause,re.I):
+                owner_match = re.match(r'^([А-ЯӘҒҚҢӨҰҮҺІ][а-яәғқңөұүһі]+),\s*',clause)
+                owner_match = owner_match or re.search(r'\b[Пп]оручаю\s+([А-ЯӘҒҚҢӨҰҮҺІ][а-яәғқңөұүһі]+)',clause)
+                owner = owner_match[1] if owner_match else None
+                hits = list(DEADLINE.finditer(clause))
+                raw = hits[-1][0] if hits else None
+                deadline = normalize_deadline(raw,ref)
+                last = Assignment(action=clause,owner=owner,deadline_raw=raw,deadline=deadline,
+                                  evidence=[ev],uncertainty=['rules_limited'] + ([] if owner else ['owner_not_stated']) + ([] if deadline else ['deadline_unclear_or_not_stated']))
+                result.assignments.append(last)
+            elif re.search(r'\b(решили|решено|бекітілді|шешім қабылданды)\b',clause,re.I):
+                result.decisions.append(Statement(text=clause,evidence=[ev]))
+                last = None
+            elif '?' in clause:
+                result.questions.append(clause)
+                last = None
+            else:
+                last = None
+    # Extractive summary, clearly identified in UI and export. No invented narrative.
+    result.summary = [x.text for x in result.decisions if x.kind == 'decision']
+    if not result.summary:
+        result.questions.append('RULES: автоматическое резюме недоступно; заполните после прослушивания.')
+    return result

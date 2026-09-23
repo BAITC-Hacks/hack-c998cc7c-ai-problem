@@ -1,236 +1,48 @@
-/* Хаттама AI — frontend */
-const $ = (s) => document.querySelector(s);
-const $$ = (s) => Array.from(document.querySelectorAll(s));
-const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-const fmtT = (sec) => { sec = Math.max(0, Math.floor(sec || 0)); return `${String(Math.floor(sec / 60)).padStart(2, "0")}:${String(sec % 60).padStart(2, "0")}`; };
+import {state,t,esc,$,$$,notify,api,json,field,input,options} from './shared.js';
+import {renderEditor} from './editor.js';
 
-const STAGES = [
-  ["upload", "Загрузка"],
-  ["transcribe", "Распознавание речи"],
-  ["diarize", "Диаризация"],
-  ["extract", "Поручения"],
-  ["summarize", "Саммари"],
-  ["export", "Экспорт"],
-];
-const SPEAKER_COLORS = ["#2f9bff", "#20c997", "#ffb454", "#ff5c7a", "#b48bff", "#4dd0e1", "#ffd54f", "#ff8a65", "#a5d6a7", "#f8bbd0"];
-const spColor = (n) => { let h = 0; for (const c of n) h = (h + c.charCodeAt(0)) % 997; return SPEAKER_COLORS[h % SPEAKER_COLORS.length]; };
-const langBadge = (l) => l ? `<span class="chip">${esc(l.toUpperCase())}</span>` : "";
+function navigation(){document.documentElement.lang=state.locale;$('#locale').textContent=state.locale==='kk'?'RU':'KZ';$$('[data-nav]').forEach(b=>{b.textContent={meetings:t('Кездесулер','Совещания'),tasks:t('Тапсырмалар','Поручения'),settings:t('Баптаулар','Настройки')}[b.dataset.nav];b.classList.toggle('active',b.dataset.nav===state.page);b.onclick=()=>location.hash=b.dataset.nav;});}
 
-const state = { meeting: null, timer: null };
-
-/* ---------------- tab switching (top level + inline) ---------------- */
-$$(".tab").forEach((b) => b.addEventListener("click", () => {
-  $$(".tab").forEach((x) => x.classList.remove("active")); b.classList.add("active");
-  $$(".tab-pane").forEach((x) => x.classList.toggle("active", x.id === "tab-" + b.dataset.tab));
-  if (b.dataset.tab === "dash") loadDash();
-}));
-$$(".itab").forEach((b) => b.addEventListener("click", () => {
-  $$(".itab").forEach((x) => x.classList.remove("active")); b.classList.add("active");
-  $$(".itab-pane").forEach((x) => x.classList.toggle("active", x.id === "i-" + b.dataset.itab));
-}));
-
-/* ---------------- llm badge ---------------- */
-async function loadHealth() {
-  try {
-    const r = await fetch("/api/health"); const h = await r.json();
-    const on = h.llm && h.llm.available;
-    const b = $("#llm-badge");
-    b.className = "llm-badge " + (on ? "on" : "off");
-    b.textContent = on ? `LLM: ${h.llm.provider}` : "Офлайн-режим (без LLM)";
-    b.title = h.llm ? h.llm.detail : "";
-  } catch { $("#llm-badge").textContent = "—"; }
+async function meetings(){
+ const {meetings}=await api('/api/meetings');
+ $('#app').innerHTML=`<div class="toolbar"><div><h1>${t('Кездесулер','Совещания')}</h1><p class="muted">${t('Жазбадан тексерілген хаттамаға дейін','От записи до проверенного протокола')}</p></div><span class="spacer"></span><button class="primary" id="new">+ ${t('Жазбаны жүктеу','Загрузить запись')}</button></div><section class="panel">${meetings.length?`<div class="table-wrap"><table><thead><tr><th>${t('Кездесу','Совещание')}</th><th>${t('Күні','Дата')}</th><th>${t('Күйі / кезеңі','Статус / этап')}</th><th></th></tr></thead><tbody>${meetings.map(m=>`<tr><td><strong>${esc(m.metadata.title)}</strong><br><small>${esc(m.metadata.mode)} · ${esc(m.filename)}</small></td><td>${esc(m.metadata.meeting_at)}<br><small>${esc(m.metadata.timezone)}</small></td><td>${esc(m.status)}<br><small>${esc(stageName(m.stage))}</small>${m.error?`<p class="notice error">${esc(m.error)}</p>`:''}</td><td><button data-open="${m.id}">${t('Ашу','Открыть')} →</button></td></tr>`).join('')}</tbody></table></div>`:`<div class="empty"><h2>${t('Әзірге кездесу жоқ','Пока нет совещаний')}</h2><p>${t('WAV, MP3 немесе MP4 жүктеңіз. Нәтиже өңдеуден кейін пайда болады.','Загрузите WAV, MP3 или MP4. Результат появится после обработки.')}</p></div>`}</section>`;
+ $('#new').onclick=()=>location.hash='upload';$$('[data-open]').forEach(b=>b.onclick=()=>location.hash='meeting/'+b.dataset.open);
 }
 
-/* ---------------- upload ---------------- */
-const dz = $("#dropzone"), fi = $("#file-input");
-dz.addEventListener("click", () => fi.click());
-["dragover", "dragenter"].forEach((e) => dz.addEventListener(e, (ev) => { ev.preventDefault(); dz.classList.add("dragover"); }));
-["dragleave", "drop"].forEach((e) => dz.addEventListener(e, (ev) => { ev.preventDefault(); dz.classList.remove("dragover"); }));
-dz.addEventListener("drop", (ev) => { if (ev.dataTransfer.files[0]) pick(ev.dataTransfer.files[0]); });
-fi.addEventListener("change", () => { if (fi.files[0]) pick(fi.files[0]); });
-
-function pick(f) {
-  $("#file-name").textContent = f.name; $("#upload-error").classList.add("hidden");
-  $("#dropzone").classList.add("hidden"); $("#file-choosen").classList.remove("hidden");
-  state.file = f;
-}
-$("#btn-reset").addEventListener("click", () => { state.file = null; fi.value = ""; $("#file-choosen").classList.add("hidden"); $("#dropzone").classList.remove("hidden"); });
-$("#btn-upload").addEventListener("click", async () => {
-  if (!state.file) return;
-  const btn = $("#btn-upload"); btn.disabled = true;
-  const fd = new FormData(); fd.append("file", state.file);
-  try {
-    const r = await fetch("/api/upload", { method: "POST", body: fd });
-    const j = await r.json();
-    if (!r.ok) throw new Error(j.detail || "Ошибка загрузки");
-    beginProgress(j.meeting_id);
-  } catch (e) { $("#upload-error").textContent = e.message; $("#upload-error").classList.remove("hidden"); }
-  btn.disabled = false;
-});
-
-/* ---------------- progress ---------------- */
-function beginProgress(id) {
-  $("#upload-card").classList.add("hidden");
-  $("#progress-card").classList.remove("hidden");
-  $("#result-card").classList.add("hidden");
-  $("#progress-steps").innerHTML = STAGES.map(([k, n]) =>
-    `<div class="step" data-st="${k}"><span class="spinner"></span><div class="st-name">${n}</div><div class="st-state">ожидание</div></div>`).join("");
-  $("#event-log").innerHTML = "";
-  poll(id);
-}
-function poll(id) {
-  clearInterval(state.timer);
-  state.timer = setInterval(async () => {
-    try {
-      const r = await fetch("/api/meetings/" + id); const m = await r.json();
-      if (!r.ok) throw new Error(m.detail);
-      renderProgress(m);
-      if (m.status === "done") { clearInterval(state.timer); renderResult(m); }
-      if (m.status === "error") { clearInterval(state.timer); $("#event-log").insertAdjacentHTML("beforeend", `<div style="color:var(--danger)">Ошибка: ${esc(m.error)}</div>`); }
-    } catch (e) { $("#event-log").insertAdjacentHTML("beforeend", `<div style="color:var(--danger)">${esc(e.message)}</div>`); }
-  }, 1500);
-}
-function renderProgress(m) {
-  const doneIdxs = new Set(m.events.map((e) => e.stage));
-  const cur = m.stage;
-  STAGES.forEach(([k], i) => {
-    const el = document.querySelector(`.step[data-st="${k}"]`);
-    if (!el) return;
-    el.classList.remove("run", "done", "err");
-    if (doneIdxs.has(k) || (m.status === "done" && i < STAGES.indexOf([m.stage || "export"]) )) el.classList.add("done");
-    if (cur === k || (cur === "extract" && k === "transcribe" && m.status === "processing")) {}
-    if (el.classList.contains("done")) {
-      el.querySelector(".st-state").textContent = "готово";
-      el.querySelector(".spinner").style.display = "none";
-    }
-  });
-  // подсветка текущего этапа
-  const curEl = document.querySelector(`.step[data-st="${cur}"]`);
-  if (curEl) { curEl.classList.add("run"); curEl.querySelector(".st-state").textContent = "выполняется"; }
-  (m.events || []).slice(-30).forEach((e) => {
-    if (!document.querySelector(`#event-log [data-e="${e.ts}"]`)) {
-      $("#event-log").insertAdjacentHTML("beforeend", `<div data-e="${e.ts}"><b>${esc(e.stage || "")}</b> · ${esc(e.message)}</div>`);
-      $("#event-log").scrollTop = 9999;
-    }
-  });
+async function upload(){
+ const h=await api('/api/health');
+ $('#app').innerHTML=`<div class="upload"><h1>${t('Жаңа кездесу','Новое совещание')}</h1><p class="muted">${t('Мерзімдер осы кездесудің күні бойынша есептеледі.','Сроки рассчитываются относительно даты этого совещания.')}</p><form id="upload-form" class="panel"><div class="grid">
+ ${field(t('Атауы','Название'),input('','name="title" required maxlength="200"'))}
+ ${field(t('Күні мен уақыты','Дата и время'),input('','name="meeting_at" type="datetime-local" required'))}
+ ${field(t('Уақыт белдеуі (IANA)','Часовой пояс (IANA)'),input('Asia/Qyzylorda','name="timezone" required'))}
+ ${field(t('Қатысушылар (үтір арқылы)','Участники (через запятую)'),input('','name="participants"'))}
+ <div class="wide">${field(t('Жазба — WAV / MP3 / MP4','Запись — WAV / MP3 / MP4'),'<input type="file" name="file" accept=".wav,.mp3,.mp4" required>')}<small>${t('Ең үлкен көлем','Максимальный размер')}: ${h.max_upload_mb} MB</small></div>
+ ${field(t('Өңдеу режимі','Режим обработки'),`<select name="mode"><option value="LOCAL">LOCAL — ${t('жергілікті LLM','локальный LLM')}</option><option value="RULES">RULES — ${t('шектеулі ережелер','ограниченные правила')}</option><option value="HYBRID">HYBRID — ${t('сыртқы LLM','внешний LLM')}</option></select>`)}
+ </div><p id="mode-info" class="notice"></p><label class="check" id="consent-label" hidden><input type="checkbox" name="consent">${t('Транскрипттің сыртқы API-ге жіберілуіне келісемін. Аудио жергілікті қалады.','Разрешаю отправку транскрипта внешнему API. Аудио остаётся локальным.')}</label>
+ ${!h.model_available?`<p class="notice">${t('ASR моделі орнатылмаған. Жүктелген жазба үшін нақты қате көрсетіледі; модельді бөлек орнатыңыз.','Модель ASR не установлена. Обработка покажет конкретную ошибку; установите модель отдельно.')}</p>`:''}
+ ${!h.ffmpeg_available?`<p class="notice">${t('FFmpeg табылмады. Баптауларды қараңыз.','FFmpeg не найден. См. настройки.')}</p>`:''}
+ <div class="toolbar"><button class="primary" type="submit">${t('Жүктеу және өңдеу','Загрузить и обработать')}</button><a class="button" href="#meetings">${t('Артқа','Назад')}</a></div></form></div>`;
+ const form=$('#upload-form');
+ const modeInfo=()=>{const mode=form.elements.mode.value;$('#consent-label').hidden=mode!=='HYBRID';form.elements.consent.required=mode==='HYBRID';$('#mode-info').textContent=mode==='LOCAL'?t('LOCAL: аудио мен транскрипт осы компьютерде өңделеді. Жергілікті LLM endpoint қажет.','LOCAL: аудио и транскрипт обрабатываются на этом компьютере. Нужен локальный LLM endpoint.'):mode==='RULES'?t('RULES: желісіз жұмыс істейтін шектеулі извлекатель. Барлық нәтижені адам тексереді.','RULES: ограниченный локальный извлекатель. Все результаты требуют проверки человеком.'):t(`HYBRID: транскрипт ${h.hybrid_endpoint||'бапталмаған API'} қызметіне жіберіледі. Бұл жабық контур емес.`,`HYBRID: транскрипт отправляется в ${h.hybrid_endpoint||'не настроенный API'}. Это не закрытый контур.`);};
+ form.elements.mode.onchange=modeInfo;modeInfo();
+ form.onsubmit=async e=>{e.preventDefault();const button=form.querySelector('button[type=submit]');button.disabled=true;try{const file=form.elements.file.files[0];if(file.size>h.max_upload_mb*1024*1024)throw Error(t('Файл тым үлкен','Файл слишком большой'));const fd=new FormData();fd.append('file',file);fd.append('metadata',JSON.stringify({title:form.elements.title.value,meeting_at:form.elements.meeting_at.value,timezone:form.elements.timezone.value,participants:form.elements.participants.value.split(',').map(s=>s.trim()).filter(Boolean),mode:form.elements.mode.value,hybrid_consent:form.elements.consent.checked}));const r=await api('/api/upload',{method:'POST',body:fd});location.hash='meeting/'+r.meeting_id;}catch(e){notify(e.message,true)}finally{button.disabled=false}};
 }
 
-/* ---------------- result ---------------- */
-function renderResult(m) {
-  state.meeting = m;
-  $("#progress-card").classList.add("hidden");
-  $("#result-card").classList.remove("hidden");
-  const res = m.result || {};
-  $("#result-meta").textContent = `${m.filename} · дата: ${m.created_at} · поручения: ${res.assignments ? res.assignments.length : 0} (${m.extract_mode || "?"}) · саммари: ${m.summary_mode || "?"}`;
-
-  // поручения (актуальные из БД)
-  const assigns = (m.assignments && m.assignments.length ? m.assignments : res.assignments) || [];
-  $("#assign-empty").classList.toggle("hidden", assigns.length > 0);
-  $("#assign-list").innerHTML = assigns.map((a, i) => {
-    const st = a.status || "в работе";
-    const overdue = a.overdue && st === "в работе";
-    const badge = overdue ? `<span class="status-badge overdue">просрочено</span>`
-      : `<span class="status-badge ${st === "выполнено" ? "done" : st === "в работе" ? "work" : "pause"}">${esc(st)}</span>`;
-    return `<div class="assign" data-id="${a.id}">
-      <div class="prio ${esc(a.priority || "medium")}"></div>
-      <div style="flex:1">
-        <div class="task">${esc(a.task)}</div>
-        <div class="meta">
-          <span class="chip">👤 ${esc(a.owner || a.speaker_label || "не указан")}</span>
-          <span class="chip">⏱ ${esc(a.deadline || a.deadline_raw || "не указан")}</span>
-          <span class="chip">🎤 ${esc(a.speaker_label || "—")}</span>
-        </div>
-        <div class="statusbar">${badge}
-          <select data-aid="${a.id}">
-            <option ${st === "в работе" ? "selected" : ""}>в работе</option>
-            <option ${st === "выполнено" ? "selected" : ""}>выполнено</option>
-          </select>
-        </div>
-      </div></div>`;
-  }).join("");
-
-  // саммари
-  $("#summary-list").innerHTML = (res.summary || []).map((s) => `<li>${esc(s)}</li>`).join("");
-
-  // транскрипт
-  $("#transcript-list").innerHTML = (res.transcript || []).map((b) =>
-    `<div class="turn">
-       <span class="t-time">${fmtT(b.start)}–${fmtT(b.end)}</span>
-       <span class="t-speaker" style="color:${spColor(b.speaker)}">${esc(b.speaker)}</span>
-       <span class="t-text">${esc(b.text)}</span>
-     </div>`).join("");
-
-  $$(".statusbar select").forEach((sel) => sel.addEventListener("change", async (e) => {
-    const aid = e.target.dataset.aid;
-    await fetch(`/api/meetings/${m.id}/assignments/${aid}`, {
-      method: "PATCH", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ status: e.target.value }),
-    });
-    const mm = await (await fetch("/api/meetings/" + m.id)).json(); renderResult(mm);
-  }));
+function stageName(s){return {queued:t('Кезекте','В очереди'),recovered:t('Қалпына келтірілді','Восстановлено'),decode:t('Аудионы тексеру','Проверка аудио'),transcribe:t('Сөйлеуді тану','Распознавание речи'),diarization_manual:t('Сөйлеушілерді қолмен белгілеу','Ручная разметка говорящих'),analyze:t('Талдау','Анализ'),review:t('Тексеруге дайын','Готово к проверке')}[s]||s;}
+async function openMeeting(id){
+ const m=await api('/api/meetings/'+id);if(state.page!=='meeting/'+id)return;
+ if(m.status==='done'||(m.status==='error'&&m.draft.transcript.length)){renderEditor(m);return;}
+ $('#app').innerHTML=`<a class="button" href="#meetings">← ${t('Кездесулер','Совещания')}</a><section class="panel"><h1>${esc(m.metadata.title)}</h1><p>${t('Күйі','Статус')}: ${esc(m.status)}</p><div class="steps">${['queued','decode','transcribe','diarization_manual','analyze','review'].map(s=>`<span class="${m.stage===s?'current':''}">${esc(stageName(s))}</span>`).join('')}</div><p role="status">${esc(stageName(m.stage))}</p>${m.error?`<p class="notice error">${esc(m.error)}</p><button id="retry">${t('Қайта бастау','Повторить')}</button>`:`<p class="muted">${t('Бетті жабуға болады: жұмыс күйі сақталады.','Страницу можно закрыть: состояние задания сохраняется.')}</p>`}<ol class="events">${m.events.map(e=>`<li>${esc(e.ts)} · ${esc(stageName(e.action))}</li>`).join('')}</ol></section>`;
+ if($('#retry'))$('#retry').onclick=async()=>{try{await api(`/api/meetings/${id}/retry`,json('POST',{revision:m.revision}));openMeeting(id);}catch(e){notify(e.message,true)}};
+ if(['queued','processing'].includes(m.status))state.timer=setTimeout(()=>openMeeting(id).catch(e=>notify(e.message,true)),1500);
 }
 
-/* ---------------- exports ---------------- */
-$$("[data-export]").forEach((b) => b.addEventListener("click", async () => {
-  const m = state.meeting; if (!m) return;
-  const fmt = b.dataset.export;
-  const url = fmt === "txt" ? `/api/meetings/${m.id}/protocol.txt` : `/api/meetings/${m.id}/export?format=${fmt}`;
-  try {
-    const r = await fetch(url); if (!r.ok) throw new Error((await r.json()).detail);
-    const blob = await r.blob(); const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob); a.download = `protocol_${m.id}.${fmt}`; a.click(); URL.revokeObjectURL(a.href);
-  } catch (e) { alert("Ошибка экспорта: " + e.message); }
-}));
+async function tasks(){const {assignments}=await api('/api/assignments');$('#app').innerHTML=`<h1>${t('Тапсырмалар тізілімі','Реестр поручений')}</h1><p class="muted">${t('Мерзімі жоқ тапсырмалар кешіккен деп саналмайды.','Поручения без срока не считаются просроченными.')}</p><section class="panel"><div class="toolbar">${field(t('Сүзгі','Фильтр'),`<select id="filter"><option value="all">${t('Барлығы','Все')}</option><option value="overdue">${t('Кешіккен','Просрочено')}</option><option value="open">open</option><option value="in_progress">in_progress</option><option value="done">done</option><option value="cancelled">cancelled</option></select>`)}</div><div id="register"></div></section>`;const render=()=>{const filter=$('#filter').value;const rows=assignments.filter(a=>filter==='all'||(filter==='overdue'?a.overdue:a.status===filter));$('#register').innerHTML=rows.length?`<div class="table-wrap"><table><thead><tr><th>${t('Тапсырма / кездесу','Поручение / совещание')}</th><th>${t('Орындаушы','Исполнитель')}</th><th>${t('Мерзім','Срок')}</th><th>${t('Күйі','Статус')}</th><th></th></tr></thead><tbody>${rows.map(a=>`<tr><td>${esc(a.action)}<br><small>${esc(a.title)}</small></td><td>${esc(a.owner||'—')}</td><td>${esc(a.deadline||a.deadline_raw||'—')}${a.overdue?`<br><span class="notice">${t('Кешіккен','Просрочено')}</span>`:''}</td><td>${esc(a.status)}<br><small>${esc(a.review)}</small></td><td><a class="button" href="#meeting/${a.meeting_id}">${t('Тексеру / өзгерту','Проверить / изменить')}</a></td></tr>`).join('')}</tbody></table></div>`:`<p class="empty">${t('Тапсырмалар табылмады','Поручения не найдены')}</p>`;};$('#filter').onchange=render;render();}
 
-/* ---------------- dashboard ---------------- */
-async function loadDash() {
-  try {
-    const r = await fetch("/api/meetings"); const { meetings } = await r.json();
-    const counts = { done: 0, work: 0, overdue: 0, all: meetings.length };
-    meetings.forEach((me) => { if (me.status === "done") counts.done++; else if (me.status === "processing") counts.work++; });
-    $("#dash-stats").innerHTML = `
-      <div class="stat"><div class="n">${counts.all}</div><div class="l">совещаний</div></div>
-      <div class="stat"><div class="n">${counts.done}</div><div class="l">готово</div></div>
-      <div class="stat"><div class="n">${counts.work}</div><div class="l">в обработке</div></div>`;
-    $("#dash-list").innerHTML = meetings.map((m) => {
-      const badge = m.status === "done" ? `<span class="status-badge done">готово</span>`
-        : m.status === "error" ? `<span class="status-badge overdue">ошибка</span>`
-        : `<span class="status-badge work">${esc(m.status)}</span>`;
-      const tasks = m.extract_mode ? "· поручения: LLM/rules" : "";
-      return `<div class="ditem" data-mi="${m.id}">
-        <div class="dhead">
-          <span class="fname">${esc(m.filename)}</span> ${badge}
-          <span class="stat" style="display:none"></span>
-          <button class="btn ghost" data-open="${m.id}" style="padding:4px 10px; font-size:12px">открыть</button>
-        </div>
-        <div class="dsub">${esc(m.created_at)} · этап: ${esc(m.stage || "—")} ${tasks} ${m.error ? "· ошибка: " + esc(m.error) : ""}</div>
-        <div class="atasks" id="tasks-${m.id}"></div>
-      </div>`;
-    }).join("");
-    $$("[data-open]").forEach((b) => b.addEventListener("click", () => {
-      $$(".tab").forEach((x) => x.classList.toggle("active", x.dataset.tab === "new"));
-      $$(".tab-pane").forEach((x) => x.classList.toggle("active", x.id === "tab-new"));
-      if (state.meeting && state.meeting.id === +b.dataset.open) { $("#result-card").classList.remove("hidden"); $("#progress-card").classList.add("hidden"); $("#upload-card").classList.add("hidden"); }
-    }));
-    // подгрузка заданий для готовых
-    for (const m of meetings) {
-      if (m.status !== "done") continue;
-      const mm = await (await fetch("/api/meetings/" + m.id)).json();
-      const el = $("#tasks-" + m.id); if (!el) continue;
-      const assigns = (mm.assignments && mm.assignments.length ? mm.assignments : (mm.result || {}).assignments) || [];
-      if (!assigns.length) { el.innerHTML = `<div class="atask"><span class="muted">поручений нет</span></div>`; continue; }
-      el.innerHTML = assigns.map((a) => {
-        const st = a.status || "в работе";
-        const badge = a.overdue ? `<span class="status-badge overdue">просрочено</span>` : `<span class="status-badge ${st === "выполнено" ? "done" : "work"}">${esc(st)}</span>`;
-        return `<div class="atask"><span class="t">${esc(a.task)}</span> ${badge}
-          <select data-daid="${a.id}"><option ${st === "в работе" ? "selected" : ""}>в работе</option><option ${st === "выполнено" ? "selected" : ""}>выполнено</option></select></div>`;
-      }).join("");
-      el.querySelectorAll("select").forEach((sel) => sel.addEventListener("change", async (e) => {
-        await fetch(`/api/meetings/${m.id}/assignments/${e.target.dataset.daid}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status: e.target.value }) });
-        loadDash();
-      }));
-    }
-  } catch (e) { $("#dash-list").innerHTML = `<p class="muted">${esc(e.message)}</p>`; }
-}
+async function settings(){const h=await api('/api/health');$('#app').innerHTML=`<h1>${t('Баптаулар','Настройки')}</h1><section class="panel"><h2>${t('Жергілікті өңдеу','Локальная обработка')}</h2><p>LOCAL · ${esc(h.local_endpoint)}</p><p>ASR: ${h.model_available?t('Модель бар','Модель найдена'):t('Модель жоқ','Модель отсутствует')} · FFmpeg: ${h.ffmpeg_available?'OK':t('Жоқ','Отсутствует')}</p><p>${t('Модельдер бөлек жүктеледі. Өңдеу кезінде жүктеу және сыртқы API-ге автоматты ауысу жоқ.','Модели загружаются отдельно. Во время обработки нет скачивания и автоматического переключения на внешний API.')}</p><p>${t('Провайдерлер мен кілттер сервердегі backend/.env арқылы бапталады.','Провайдеры и ключи настраиваются на сервере в backend/.env.')}</p><h2>HYBRID</h2><p>${esc(h.hybrid_endpoint||t('Бапталмаған','Не настроен'))}</p><p>${t('Тек жүктеу формасындағы айқын келісіммен: транскрипт сыртқа жіберіледі, аудио осы компьютерде қалады.','Только с явным согласием в форме загрузки: транскрипт отправляется наружу, аудио остаётся на компьютере.')}</p><h2>${t('Шектеулер','Ограничения')}</h2><p>${t('Автоматты диаризация қосылмаған; сөйлеушілер қолмен белгіленеді. Аутентификациясыз интернетке жарияламаңыз.','Автоматическая диаризация не подключена; говорящие назначаются вручную. Не публикуйте в интернете без аутентификации.')}</p></section>`;}
 
-loadHealth();
+async function route(){clearTimeout(state.timer);if(state.dirty){notify(t('Сақталмаған өзгерістер бар. Алдымен сақтаңыз.','Есть несохранённые изменения. Сначала сохраните их.'),true);history.replaceState(null,'','#meeting/'+state.meeting.id);return;}state.page=location.hash.slice(1)||'meetings';navigation();notify('');try{if(state.page==='upload')await upload();else if(state.page.startsWith('meeting/'))await openMeeting(state.page.split('/')[1]);else if(state.page==='tasks')await tasks();else if(state.page==='settings')await settings();else await meetings();}catch(e){notify(e.message,true)}}
+$('#locale').onclick=()=>{state.locale=state.locale==='kk'?'ru':'kk';localStorage.setItem('khattama-locale',state.locale);navigation();if(state.page.startsWith('meeting/')&&state.draft){const dirty=state.dirty;const draft=state.draft;renderEditor({...state.meeting,draft});state.dirty=dirty;}else route();};
+window.addEventListener('hashchange',route);
+window.addEventListener('beforeunload',e=>{if(state.dirty){e.preventDefault();e.returnValue='';}});
+route();
