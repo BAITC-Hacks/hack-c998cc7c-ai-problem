@@ -52,12 +52,17 @@ test('layout remains within viewport at supported widths', async ({ page }) => {
   page.on('pageerror', error => errors.push(error.message));
   for (const width of [320, 768, 1024, 1440]) {
     await page.setViewportSize({ width, height: 900 });
-    for (const path of ['/#meetings', '/#meeting/1', '/#upload', '/#tasks', '/#settings']) {
+    for (const [path, title] of [
+      ['/#meetings', 'Совещания'],
+      ['/#meeting/1', 'Планирование запуска'],
+      ['/#upload', 'Новое совещание'],
+      ['/#tasks', 'Поручения'],
+      ['/#settings', 'Настройки'],
+    ]) {
       await page.goto(path);
-      await expect(page.locator('h1')).toBeVisible();
+      await expect(page.locator('h1')).toHaveText(title);
       await expect(page.locator('#app .loader')).toHaveCount(0);
-      await page.waitForLoadState('networkidle');
-      expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBeTruthy();
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), `${path} at ${width}px`).toBeTruthy();
     }
   }
   expect(errors).toEqual([]);

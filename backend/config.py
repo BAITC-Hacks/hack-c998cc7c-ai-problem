@@ -1,6 +1,7 @@
 """Server-only configuration. Processing never downloads models."""
 
 import os
+import ipaddress
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -23,8 +24,6 @@ ASR_API_MODEL = os.getenv("ASR_API_MODEL", "")
 ASR_API_KEY = os.getenv("ASR_API_KEY", "")
 # PCM mono 16 kHz: a 600-second part is about 19.2 MB.
 ASR_CHUNK_SECONDS = int(os.getenv("ASR_CHUNK_SECONDS", "600"))
-# Minimum pause (seconds) between segments that starts a new "Говорящий N" turn.
-DIARIZATION_GAP_SECONDS = float(os.getenv("DIARIZATION_GAP_SECONDS", "0.7"))
 MAX_UPLOAD_BYTES = int(os.getenv("MAX_UPLOAD_MB", "250")) * 1024 * 1024
 MAX_AUDIO_SECONDS = int(os.getenv("MAX_AUDIO_SECONDS", "14400"))
 from shutil import which
@@ -59,6 +58,13 @@ ALLOWED_HOSTS = [
 
 
 def validate_deployment():
+    if not PUBLIC_MODE:
+        try:
+            loopback = HOST == 'localhost' or ipaddress.ip_address(HOST).is_loopback
+        except ValueError:
+            loopback = False
+        if not loopback:
+            raise ValueError('Local mode requires a loopback HOST (127.0.0.1 or ::1)')
     if DEFAULT_MODE not in {"LOCAL", "HYBRID", "RULES"} or DEFAULT_ASR_MODE not in {"LOCAL", "API"}:
         raise ValueError("Invalid DEFAULT_MODE or DEFAULT_ASR_MODE")
     if not 1 <= ASR_CHUNK_SECONDS <= 600:

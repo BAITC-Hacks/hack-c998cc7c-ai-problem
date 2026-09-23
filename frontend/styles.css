@@ -779,6 +779,7 @@ input[type="file"]::file-selector-button {
 
 /* ------------------------------------------------------------------ Table   */
 .table-wrap {
+  position: relative;
   overflow-x: auto;
   max-width: 100%;
 }
@@ -938,7 +939,8 @@ pre {
 }
 
 /* ---------------------------------------------------------------- Workspace */
-#editor-fields {
+#editor-fields,
+#upload-fields {
   min-width: 0;
   border: 0;
   padding: 0;
@@ -1064,6 +1066,15 @@ audio {
   font-size: 10px;
 }
 
+.evidence-row {
+  display: flex;
+  align-items: start;
+  gap: 6px;
+}
+.evidence-row .evidence {
+  min-width: 0;
+  flex: 1;
+}
 .evidence {
   display: block;
   text-align: left;

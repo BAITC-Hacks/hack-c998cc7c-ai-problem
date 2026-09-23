@@ -1,0 +1,46 @@
+name: Tests
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Python environment
+        run: |
+          python -m venv .venv
+          .venv/bin/python -m pip install -r requirements-dev.txt
+      - name: Browser environment
+        run: |
+          npm ci --prefix frontend --ignore-scripts
+          cd frontend
+          npx playwright install --with-deps chromium
+      - name: Backend and real FFmpeg checks
+        run: .venv/bin/python -m pytest -q -m 'not asr'
+      - name: JavaScript syntax
+        run: npm run check --prefix frontend
+      - name: Browser regressions
+        run: npm test --prefix frontend
+      - name: Keep failed browser traces
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-traces
+          path: frontend/test-results/
+          retention-days: 7

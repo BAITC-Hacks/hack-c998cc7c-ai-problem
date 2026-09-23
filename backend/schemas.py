@@ -63,6 +63,12 @@ class Evidence(Strict):
     start: float = Field(ge=0, allow_inf_nan=False)
     end: float = Field(ge=0, allow_inf_nan=False)
 
+    @model_validator(mode="after")
+    def timing(self):
+        if self.end < self.start:
+            raise ValueError("Invalid evidence timing")
+        return self
+
 
 class Assignment(Strict):
     id: str = Field(default_factory=lambda: uuid4().hex)
@@ -126,13 +132,16 @@ def _collapse(value):
 def evidence_in_transcript(evidence, segments, lookup, tolerance=0.5):
     """Ground a piece of evidence in the transcript.
 
-    Whisper segments split mid-sentence, so the anchored segment plus its
-    nearest neighbours are accepted together: the quote must appear verbatim
-    (modulo whitespace) inside the contiguous window that covers the evidence
-    timings within ``tolerance`` seconds. Fabricated text is still rejected.
+    A quote can span adjacent segments, but only those needed to cover its
+    stated times. Never widen the search merely to find the supplied text:
+    that could validate a real quote at an unrelated playback position.
     """
     anchor = lookup.get(evidence.segment_id)
     if anchor is None:
+        return False
+    if (evidence.end < evidence.start
+            or evidence.end < anchor.start - tolerance
+            or evidence.start > anchor.end + tolerance):
         return False
     quote = _collapse(evidence.quote)
     if not quote:
@@ -143,21 +152,12 @@ def evidence_in_transcript(evidence, segments, lookup, tolerance=0.5):
     if idx is None:
         return False
     lo = hi = idx
-    window = _collapse(anchor.text)
-    while True:
-        if (
-            segments[lo].start - tolerance <= evidence.start
-            and evidence.end <= segments[hi].end + tolerance
-            and quote in window
-        ):
-            return True
-        can_back = lo > 0
-        can_forward = hi + 1 < len(segments)
-        if not can_back and not can_forward:
-            return False
-        if can_back and (not can_forward or segments[lo - 1].end >= evidence.start - tolerance):
-            lo -= 1
-            window = _collapse(segments[lo].text) + " " + window
-        else:
-            hi += 1
-            window = window + " " + _collapse(segments[hi].text)
+    while lo > 0 and evidence.start < segments[lo].start - tolerance:
+        lo -= 1
+    while hi + 1 < len(segments) and evidence.end > segments[hi].end + tolerance:
+        hi += 1
+    if (evidence.start < segments[lo].start - tolerance
+            or evidence.end > segments[hi].end + tolerance):
+        return False
+    window = " ".join(_collapse(s.text) for s in segments[lo:hi + 1])
+    return quote in window

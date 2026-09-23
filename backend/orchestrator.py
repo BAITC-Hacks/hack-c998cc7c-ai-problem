@@ -5,6 +5,8 @@ import threading
 import wave
 from pathlib import Path
 import subprocess
+import logging
+from sqlalchemy.exc import OperationalError
 import config
 import db
 from agents.transcribe import transcribe_audio
@@ -16,6 +18,7 @@ from schemas import Draft, Metadata, Segment
 _stop = threading.Event()
 _thread = None
 _lock_file = None
+_logger = logging.getLogger(__name__)
 
 
 def decode(path, output):
@@ -115,12 +118,28 @@ def process(m):
 
 
 def loop():
+    pending_failure = None
     while not _stop.is_set():
-        m = db.claim()
-        if m:
-            process(m)
-        else:
-            _stop.wait(1)
+        try:
+            if pending_failure is not None:
+                # Persist the terminal state before taking another job. Retrying
+                # the whole process here could repeat a paid external request.
+                db.fail(pending_failure, "PROCESSING_FAILED: database unavailable during processing; retry after recovery")
+                pending_failure = None
+                continue
+            m = db.claim()
+            if m:
+                try:
+                    process(m)
+                except OperationalError:
+                    pending_failure = m["id"]
+                    raise
+            else:
+                _stop.wait(1)
+        except OperationalError:
+            # A temporary SQLite lock must not permanently kill the only worker.
+            _logger.warning("Queue database unavailable; retrying in 5 seconds")
+            _stop.wait(5)
 
 
 def start():

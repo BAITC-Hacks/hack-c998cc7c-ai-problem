@@ -83,4 +83,5 @@ def test_upload_worker_uses_both_apis_and_preserves_audio_times(client, audio_ap
     assert meeting['status'] == 'done', meeting['error']
     assert [s['start'] for s in meeting['draft']['transcript']] == [0, 2]
     assert meeting['draft']['summary'] == ['Обсудили план.']
-    assert calls == ['https://speech.example/v1/audio/transcriptions'] * 2 + ['https://text.example/v1/chat/completions'] * 2  # diarization + analysis
+    assert all(s['speaker'] is None for s in meeting['draft']['transcript'])
+    assert calls == ['https://speech.example/v1/audio/transcriptions'] * 2 + ['https://text.example/v1/chat/completions']

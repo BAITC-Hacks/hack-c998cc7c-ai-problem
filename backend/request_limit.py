@@ -20,6 +20,8 @@ class RequestLimit:
         headers = dict(scope["headers"])
         try:
             length = int(headers.get(b"content-length", b"0"))
+            if length < 0:
+                raise ValueError('Negative Content-Length')
         except ValueError:
             return await JSONResponse({"detail": "Invalid Content-Length"}, 400)(
                 scope, receive, send

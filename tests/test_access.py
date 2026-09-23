@@ -78,7 +78,11 @@ def test_public_http_redirect_precedes_auth_and_preserves_export_query(client, m
     assert signed_in.headers['cache-control'] == 'no-store'
 
 
-def test_correct_password_can_sign_in_after_failed_attempt_limit(client, monkeypatch):
+def test_correct_password_can_sign_in_after_failed_attempt_window_expires(client, monkeypatch):
+    import access
+    from types import SimpleNamespace
+    now = [10000.0]
+    monkeypatch.setattr(access, 'time', SimpleNamespace(monotonic=lambda: now[0]))
     monkeypatch.setattr(config, 'APP_AUTH_PASSWORD', 'a-long-test-password')
     monkeypatch.setattr(config, 'APP_AUTH_USER', 'demo')
     auth = ('demo', 'a-long-test-password')
@@ -91,6 +95,8 @@ def test_correct_password_can_sign_in_after_failed_attempt_limit(client, monkeyp
     assert int(limited.headers['retry-after']) > 0
     assert limited.headers['cache-control'] == 'no-store'
 
+    assert client.get('/api/meetings', auth=auth).status_code == 429
+    now[0] += 61
     assert client.get('/api/meetings', auth=auth).status_code == 200
     assert client.get('/api/meetings', auth=('demo', 'wrong')).status_code == 401
 

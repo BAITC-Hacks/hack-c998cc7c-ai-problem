@@ -2,6 +2,7 @@
 
 import base64
 import binascii
+import math
 import secrets
 import time
 from collections import OrderedDict
@@ -28,6 +29,16 @@ class SharedPasswordAuth:
             return await RedirectResponse(target, status_code=307)(scope, receive, send)
         if password:
             value = dict(scope["headers"]).get(b"authorization", b"")
+            now = time.monotonic()
+            key = (scope.get("client") or ("unknown",))[0]
+            count, start = self.failures.get(key, (0, now))
+            if now - start >= 60:
+                count, start = 0, now
+                self.failures.pop(key, None)
+            # Stop checking guesses during the penalty window, including correct ones.
+            if value and count >= 20:
+                retry_after = max(1, math.ceil(60 - (now - start)))
+                return await JSONResponse({"detail": "Too many sign-in attempts"}, 429, headers={"Retry-After": str(retry_after), "Cache-Control": "no-store"})(scope, receive, send)
             valid = False
             try:
                 scheme, encoded = value.split(b" ", 1)
@@ -37,11 +48,6 @@ class SharedPasswordAuth:
             except (ValueError, binascii.Error):
                 pass
             if not valid:
-                now = time.monotonic()
-                key = (scope.get("client") or ("unknown",))[0]
-                count, start = self.failures.get(key, (0, now))
-                if now - start >= 60:
-                    count, start = 0, now
                 # Only failed supplied credentials count, not the browser's initial challenge.
                 if value:
                     count += 1
@@ -49,8 +55,6 @@ class SharedPasswordAuth:
                     self.failures.move_to_end(key)
                 while len(self.failures) > 1024:
                     self.failures.popitem(last=False)
-                if count > 20:
-                    return await JSONResponse({"detail": "Too many sign-in attempts"}, 429, headers={"Retry-After": "60", "Cache-Control": "no-store"})(scope, receive, send)
                 return await JSONResponse(
                     {"detail": "Sign in to this workspace"}, 401,
                     headers={"WWW-Authenticate": 'Basic realm="Khattama AI", charset="UTF-8"', "Cache-Control": "no-store"},

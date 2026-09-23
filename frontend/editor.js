@@ -45,7 +45,7 @@ function syncReview() {
 document.addEventListener("draftchange", syncReview);
 
 function evidenceList(item, index, type) {
-  return `<div>${item.evidence.map((e) => `<button class="evidence" data-seek="${esc(e.segment_id)}">${time(e.start)}–${time(e.end)} · «${esc(e.quote)}»</button>`).join("")}</div><label class="field">${t("Дәйексөзді қосу / жаңарту", "Добавить / обновить доказательство")}<select data-evidence="${type}:${index}"><option value="">${t("Сегментті таңдаңыз", "Выберите сегмент")}</option>${state.draft.transcript.map((s, i) => `<option value="${i}">${esc(time(s.start) + " " + s.text.slice(0, 90))}</option>`).join("")}</select></label>`;
+  return `<div>${item.evidence.map((e, evidenceIndex) => `<div class="evidence-row"><button class="evidence" data-seek="${esc(e.segment_id)}">${time(e.start)}–${time(e.end)} · «${esc(e.quote)}»</button><button class="compact" data-remove-evidence="${type}:${index}:${evidenceIndex}" aria-label="${t("Дәйексөзді жою", "Удалить доказательство")} ${evidenceIndex + 1}">×</button></div>`).join("")}</div><label class="field">${t("Дәйексөзді қосу / жаңарту", "Добавить / обновить доказательство")}<select data-evidence="${type}:${index}"><option value="">${t("Сегментті таңдаңыз", "Выберите сегмент")}</option>${state.draft.transcript.map((s, i) => `<option value="${i}">${esc(time(s.start) + " " + s.text.slice(0, 90))}</option>`).join("")}</select></label>`;
 }
 
 function tasks() {
@@ -113,7 +113,7 @@ function right() {
     (el) =>
       (el.oninput = () => {
         const [i, k] = el.dataset.task.split(":");
-        state.draft.assignments[i][k] = el.value || null;
+        state.draft.assignments[i][k] = k === "action" || k === "status" ? el.value : el.value || null;
         if (k !== "status") state.draft.assignments[i].review = "needs_review";
         if (k === "status") dirty(); else contentChanged();
       }),
@@ -186,6 +186,17 @@ function right() {
         right();
       }),
   );
+  $$("[data-remove-evidence]").forEach(el => {
+    el.onclick = () => {
+      const [type, index, evidenceIndex] = el.dataset.removeEvidence.split(":");
+      const item = type === "task" ? state.draft.assignments[index] : state.draft.decisions[index];
+      item.evidence.splice(Number(evidenceIndex), 1);
+      if (type === "task") item.review = "needs_review";
+      else state.draft.reviewed = false;
+      contentChanged();
+      right();
+    };
+  });
   $$("[data-seek]").forEach((el) => (el.onclick = () => seek(el.dataset.seek)));
   if ($("#add-task"))
     $("#add-task").onclick = () => {
@@ -253,7 +264,7 @@ export function renderEditor(m, preserved = {}) {
     `<fieldset id="editor-fields"><div class="toolbar"><button id="back">← ${t("Кездесулер", "Совещания")}</button><span class="badge">${esc(m.metadata.mode)}</span><span class="spacer"></span><span>${t("Жоба", "Черновик")} · r${m.revision}</span></div><h1>${esc(m.metadata.title)}</h1><p class="muted">${esc(dateLabel(m.metadata.meeting_at, m.metadata.timezone))} · ${esc(m.metadata.timezone)} · ${esc(m.metadata.participants.join(", "))}</p>
  ${m.error ? `<p class="notice error">${esc(m.error)}</p>` : ""}
  <div class="toolbar version-bar"><label>${t("Экспорт нұсқасы", "Версия для экспорта")} <select id="version"><option value="">${t("Ағымдағы жоба", "Текущий черновик")}</option>${m.versions.map((v) => `<option value="${v.id}">v${v.revision} · ${esc(v.created_at.slice(0, 16))}</option>`).join("")}</select></label><label class="check"><input id="with-transcript" type="checkbox" checked>${t("Транскриптпен", "С транскриптом")}</label><button data-export="docx">DOCX ↓</button><button data-export="pdf">PDF ↓</button><button id="view-version">${t("Нұсқаны көру", "Просмотр версии")}</button></div>
- <div class="notice info">${t("Сөйлеуші «Говорящий N» болып автоматты белгіленеді. Атын нақты адамға қолмен өзгертіңіз. Сөйлеуші міндетті түрде орындаушы емес.", "Говорящие автоматически помечаются как «Говорящий N». Переименуйте их в реальных людей вручную. Говорящий не обязательно является исполнителем.")}</div>
+ <div class="notice info">${t("Белгісіз сөйлеушілерді жазбаны тыңдап қолмен белгілеңіз. Сөйлеуші міндетті түрде орындаушы емес.", "Укажите неизвестных говорящих вручную, сверяясь с записью. Говорящий не обязательно является исполнителем.")}</div>
  ${m.candidate ? `<details class="panel candidate-panel"><summary>${t("Жаңа талдауды салыстыру", "Сравнить повторный анализ")}</summary><p class="muted">${t("Жаңа нәтиже ағымдағы черновикті тек сіз қолданған кезде ауыстырады.", "Новый результат заменит текущий черновик только после вашего решения.")}</p><div class="grid comparison"><section><h2>${t("Ағымдағы нұсқа", "Текущая версия")}</h2>${protocolPreview(m.draft)}</section><section><h2>${t("Жаңа талдау", "Новый анализ")}</h2>${protocolPreview(m.candidate)}</section></div><button id="apply-candidate">${t("Салыстырдым, жаңа нәтижені қолдану", "Применить новый результат")}</button></details>` : ""}
  <div class="workspace"><section class="panel"><h2>${t("Жазба және транскрипт", "Запись и транскрипт")}</h2><audio id="player" controls preload="metadata" src="/api/meetings/${m.id}/audio"></audio><div class="scroll">${d.transcript
    .map(
@@ -279,9 +290,9 @@ export function renderEditor(m, preserved = {}) {
  ]
    .map(
      ([k, label]) =>
-       `<button role="tab" aria-selected="${state.tab === k}" data-tab="${k}" class="${state.tab === k ? "active" : ""}">${label}</button>`,
+       `<button id="tab-${k}" role="tab" aria-controls="right-content" aria-selected="${state.tab === k}" data-tab="${k}" class="${state.tab === k ? "active" : ""}">${label}</button>`,
    )
-   .join("")}</div><div id="right-content" role="tabpanel" aria-label="${t("Хаттама мазмұны", "Содержание протокола")}"></div></section></div>
+   .join("")}</div><div id="right-content" role="tabpanel" aria-labelledby="tab-${state.tab}"></div></section></div>
  <div class="savebar"><div class="review-status"><strong id="review-progress"></strong><p id="review-hint" class="muted"></p></div><span class="review-progress" aria-hidden="true"><i id="review-progress-bar"></i></span><label class="check"><input type="checkbox" id="reviewed" ${d.reviewed ? "checked" : ""}>${t("Транскрипт, түйін, шешімдер мен сұрақтарды тексердім", "Транскрипт, резюме, решения и вопросы проверены")}</label><div class="toolbar"><button class="primary" id="save">${t("Өзгерістерді сақтау", "Сохранить изменения")}</button><button id="discard">${t("Өзгерістерді қайтару", "Отменить правки")}</button><button id="approve">${t("Нұсқаны бекіту", "Утвердить версию")}</button><button id="reanalyze">${t("Қайта талдау", "Повторный анализ")}</button><span id="unsaved" class="muted"></span></div><small>${t("Бекіту — қолданбадағы нұсқаны сақтау; электрондық қолтаңба емес.", "Утверждение сохраняет версию в приложении; это не электронная подпись.")}</small></div>
  <details><summary>${t("Өзгерістер журналы", "Журнал изменений")}</summary><ol class="events">${m.events.map((e) => `<li>${esc(e.ts)} · ${esc(e.action)}</li>`).join("")}</ol><button id="audit-detail">${t("Толық журнал", "Полный журнал")}</button><pre id="audit-json"></pre></details></fieldset>`;
   right();
@@ -290,7 +301,7 @@ export function renderEditor(m, preserved = {}) {
     (el) =>
       (el.oninput = () => {
         const [i, k] = el.dataset.segmentField.split(":");
-        d.transcript[i][k] = el.value || null;
+        d.transcript[i][k] = k === "speaker" ? el.value || null : el.value;
         d.reviewed = false;
         $("#reviewed").checked = false;
         d.assignments.forEach((a) => (a.review = "needs_review"));
@@ -301,6 +312,7 @@ export function renderEditor(m, preserved = {}) {
     (el) =>
       (el.onclick = () => {
         state.tab = el.dataset.tab;
+        $("#right-content").setAttribute("aria-labelledby", el.id);
         $$("[data-tab]").forEach((b) => {
           b.classList.toggle("active", b === el);
           b.setAttribute("aria-selected", b === el);
@@ -421,6 +433,12 @@ export function renderEditor(m, preserved = {}) {
 
 async function save() {
   if (!state.dirty) return;
+  const emptySegment = state.draft.transcript.findIndex(segment => !segment.text?.trim());
+  if (emptySegment !== -1) throw Error(t(`Реплика ${emptySegment + 1}: мәтінді енгізіңіз.`, `Реплика ${emptySegment + 1}: заполните текст.`));
+  const emptyTask = state.draft.assignments.findIndex(task => !task.action?.trim());
+  if (emptyTask !== -1) throw Error(t(`Тапсырма ${emptyTask + 1}: әрекетті енгізіңіз немесе бос тапсырманы жойыңыз.`, `Поручение ${emptyTask + 1}: заполните действие или удалите пустое поручение.`));
+  const emptyDecision = state.draft.decisions.findIndex(decision => !decision.text?.trim());
+  if (emptyDecision !== -1) throw Error(t(`Шешім ${emptyDecision + 1}: мәтінді енгізіңіз немесе бос жолды жойыңыз.`, `Решение ${emptyDecision + 1}: заполните текст или удалите пустую запись.`));
   const position = $("#player")?.currentTime || 0;
   const m = await api(
     `/api/meetings/${state.meeting.id}/draft`,
