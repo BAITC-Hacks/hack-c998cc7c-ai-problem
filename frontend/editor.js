@@ -15,6 +15,31 @@ import {
   dirty,
   reason,
 } from "./shared.js";
+import { protocolPreview, dateLabel } from "./views.js";
+
+function contentChanged() {
+  state.contentDirty = true;
+  dirty();
+}
+
+function syncReview() {
+  if (!state.draft || !$("#reviewed")) return;
+  $("#reviewed").checked = state.draft.reviewed;
+  $("#reviewed").disabled = state.contentDirty;
+  $$("[data-confirm]").forEach(el => {
+    el.checked = state.draft.assignments[el.dataset.confirm].review === "confirmed";
+    el.disabled = state.contentDirty;
+  });
+  const confirmed = state.draft.assignments.filter(a => a.review === "confirmed").length;
+  const progress = $("#review-progress");
+  if (progress) progress.textContent = t(`Тексерілген тапсырмалар: ${confirmed} / ${state.draft.assignments.length}`, `Проверено поручений: ${confirmed} из ${state.draft.assignments.length}`);
+  const hint = $("#review-hint");
+  if (hint) hint.textContent = state.contentDirty ? t("Алдымен өзгерістерді сақтаңыз, содан кейін тексеруді растаңыз.", "Сначала сохраните правки, затем подтвердите проверку.") : t("Дереккөзді және тапсырмаларды тексеріп, нұсқаны бекітіңіз.", "Сверьте источник и поручения, затем утвердите версию.");
+  if ($("#save")) $("#save").disabled = !state.dirty;
+  if ($("#discard")) $("#discard").disabled = !state.dirty;
+  if ($("#approve")) $("#approve").disabled = state.contentDirty || !state.draft.reviewed || confirmed !== state.draft.assignments.length;
+}
+document.addEventListener("draftchange", syncReview);
 
 function evidenceList(item, index, type) {
   return `<div>${item.evidence.map((e) => `<button class="evidence" data-seek="${esc(e.segment_id)}">${time(e.start)}–${time(e.end)} · «${esc(e.quote)}»</button>`).join("")}</div><label class="field">${t("Дәйексөзді қосу / жаңарту", "Добавить / обновить доказательство")}<select data-evidence="${type}:${index}"><option value="">${t("Сегментті таңдаңыз", "Выберите сегмент")}</option>${state.draft.transcript.map((s, i) => `<option value="${i}">${esc(time(s.start) + " " + s.text.slice(0, 90))}</option>`).join("")}</select></label>`;
@@ -87,7 +112,7 @@ function right() {
         const [i, k] = el.dataset.task.split(":");
         state.draft.assignments[i][k] = el.value || null;
         if (k !== "status") state.draft.assignments[i].review = "needs_review";
-        dirty();
+        if (k === "status") dirty(); else contentChanged();
       }),
   );
   $$("[data-missing]").forEach(
@@ -115,14 +140,15 @@ function right() {
         const [i, k] = el.dataset.decision.split(":");
         state.draft.decisions[i][k] = el.value;
         state.draft.reviewed = false;
-        dirty();
+        contentChanged();
       }),
   );
   $$("[data-delete-task]").forEach(
     (el) =>
       (el.onclick = () => {
         state.draft.assignments.splice(+el.dataset.deleteTask, 1);
-        dirty();
+        state.draft.reviewed = false;
+        contentChanged();
         right();
       }),
   );
@@ -131,7 +157,7 @@ function right() {
       (el.onclick = () => {
         state.draft.decisions.splice(+el.dataset.deleteDecision, 1);
         state.draft.reviewed = false;
-        dirty();
+        contentChanged();
         right();
       }),
   );
@@ -152,8 +178,8 @@ function right() {
           start: s.start,
           end: s.end,
         });
-        if (type === "task") a.review = "needs_review";
-        dirty();
+        if (type === "task") a.review = "needs_review"; else state.draft.reviewed = false;
+        contentChanged();
         right();
       }),
   );
@@ -174,13 +200,14 @@ function right() {
         status: "open",
         origin: "manual",
       });
-      dirty();
+      contentChanged();
       right();
     };
   if ($("#add-decision"))
     $("#add-decision").onclick = () => {
       state.draft.decisions.push({ text: "", kind: "decision", evidence: [] });
-      dirty();
+      state.draft.reviewed = false;
+      contentChanged();
       right();
     };
   ["summary", "questions"].forEach((k) => {
@@ -189,9 +216,10 @@ function right() {
       el.oninput = () => {
         state.draft[k] = el.value.split("\n").filter((x) => x.trim());
         state.draft.reviewed = false;
-        dirty();
+        contentChanged();
       };
   });
+  syncReview();
 }
 
 function seek(id) {
@@ -202,20 +230,21 @@ function seek(id) {
     el.classList.toggle("selected", el.dataset.segment === id),
   );
   const el = $$(".segment").find((el) => el.dataset.segment === id);
-  el?.scrollIntoView({ behavior: "smooth", block: "center" });
+  el?.scrollIntoView({ behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth", block: "center" });
 }
 
-export function renderEditor(m) {
+export function renderEditor(m, preserved = {}) {
   state.meeting = m;
-  state.draft = structuredClone(m.draft);
-  state.dirty = false;
+  state.draft = structuredClone(preserved.draft || m.draft);
+  state.dirty = preserved.dirty || false;
+  state.contentDirty = preserved.contentDirty || false;
   const d = state.draft;
   $("#app").innerHTML =
-    `<div class="toolbar"><button id="back">← ${t("Кездесулер", "Совещания")}</button><span class="badge">${esc(m.metadata.mode)}</span><span class="spacer"></span><span>${t("Жоба", "Черновик")} · r${m.revision}</span></div><h1>${esc(m.metadata.title)}</h1><p class="muted">${esc(m.metadata.meeting_at)} · ${esc(m.metadata.timezone)} · ${esc(m.metadata.participants.join(", "))}</p>
+    `<fieldset id="editor-fields"><div class="toolbar"><button id="back">← ${t("Кездесулер", "Совещания")}</button><span class="badge">${esc(m.metadata.mode)}</span><span class="spacer"></span><span>${t("Жоба", "Черновик")} · r${m.revision}</span></div><h1>${esc(m.metadata.title)}</h1><p class="muted">${esc(dateLabel(m.metadata.meeting_at, m.metadata.timezone))} · ${esc(m.metadata.timezone)} · ${esc(m.metadata.participants.join(", "))}</p>
  ${m.error ? `<p class="notice error">${esc(m.error)}</p>` : ""}
  <div class="toolbar version-bar"><label>${t("Экспорт нұсқасы", "Версия для экспорта")} <select id="version"><option value="">${t("Ағымдағы жоба", "Текущий черновик")}</option>${m.versions.map((v) => `<option value="${v.id}">v${v.revision} · ${esc(v.created_at.slice(0, 16))}</option>`).join("")}</select></label><label class="check"><input id="with-transcript" type="checkbox" checked>${t("Транскриптпен", "С транскриптом")}</label><button data-export="docx">DOCX ↓</button><button data-export="pdf">PDF ↓</button><button id="view-version">${t("Нұсқаны көру", "Просмотр версии")}</button></div>
  <div class="notice">${t("Сөйлеушілер автоматты анықталмайды. Әр сегментке атын қолмен беріңіз. Сөйлеуші міндетті түрде орындаушы емес.", "Говорящие автоматически не определяются. Назначьте имена сегментам вручную. Говорящий не обязательно исполнитель.")}</div>
- ${m.candidate ? `<details class="panel"><summary>${t("Қайта талдау нәтижесі дайын", "Новый анализ готов для сравнения")}</summary><div class="grid"><div><h3>${t("Ағымдағы түзетулер", "Текущие правки")}</h3><pre>${esc(JSON.stringify(m.draft, null, 2))}</pre></div><div><h3>${t("Жаңа нәтиже", "Новый результат")}</h3><pre>${esc(JSON.stringify(m.candidate, null, 2))}</pre></div></div><p>${t("Қабылдау ағымдағы жобаны ауыстырады. Алдыңғы мәтін өзгерістер журналында қалады.", "Применение заменит текущий черновик. Предыдущий текст сохранится в журнале изменений.")}</p><button id="apply-candidate">${t("Салыстырдым, жаңа нәтижені қолдану", "Сравнение завершено, применить новый результат")}</button></details>` : ""}
+ ${m.candidate ? `<details class="panel candidate-panel"><summary>${t("Жаңа талдауды салыстыру", "Сравнить повторный анализ")}</summary><p class="muted">${t("Жаңа нәтиже ағымдағы черновикті тек сіз қолданған кезде ауыстырады.", "Новый результат заменит текущий черновик только после вашего решения.")}</p><div class="grid comparison"><section><h2>${t("Ағымдағы нұсқа", "Текущая версия")}</h2>${protocolPreview(m.draft)}</section><section><h2>${t("Жаңа талдау", "Новый анализ")}</h2>${protocolPreview(m.candidate)}</section></div><button id="apply-candidate">${t("Салыстырдым, жаңа нәтижені қолдану", "Применить новый результат")}</button></details>` : ""}
  <div class="workspace"><section class="panel"><h2>${t("Жазба және транскрипт", "Запись и транскрипт")}</h2><audio id="player" controls preload="metadata" src="/api/meetings/${m.id}/audio"></audio><div class="scroll">${d.transcript
    .map(
      (s, i) =>
@@ -242,9 +271,9 @@ export function renderEditor(m) {
      ([k, label]) =>
        `<button role="tab" aria-selected="${state.tab === k}" data-tab="${k}" class="${state.tab === k ? "active" : ""}">${label}</button>`,
    )
-   .join("")}</div><div id="right-content"></div></section></div>
- <div class="savebar"><label class="check"><input type="checkbox" id="reviewed" ${d.reviewed ? "checked" : ""}>${t("Транскрипт, түйін, шешімдер мен сұрақтарды тексердім", "Транскрипт, резюме, решения и вопросы проверены")}</label><div class="toolbar"><button class="primary" id="save">${t("Өзгерістерді сақтау", "Сохранить изменения")}</button><button id="approve">${t("Нұсқаны бекіту", "Утвердить версию")}</button><button id="reanalyze">${t("Қайта талдау", "Повторный анализ")}</button><span id="unsaved" class="muted"></span></div><small>${t("Бекіту — қолданбадағы нұсқаны сақтау; электрондық қолтаңба емес.", "Утверждение сохраняет версию в приложении; это не электронная подпись.")}</small></div>
- <details><summary>${t("Өзгерістер журналы", "Журнал изменений")}</summary><ol class="events">${m.events.map((e) => `<li>${esc(e.ts)} · ${esc(e.action)}</li>`).join("")}</ol><button id="audit-detail">${t("Толық журнал", "Полный журнал")}</button><pre id="audit-json"></pre></details>`;
+   .join("")}</div><div id="right-content" role="tabpanel" aria-label="${t("Хаттама мазмұны", "Содержание протокола")}"></div></section></div>
+ <div class="savebar"><div class="review-status"><strong id="review-progress"></strong><p id="review-hint" class="muted"></p></div><label class="check"><input type="checkbox" id="reviewed" ${d.reviewed ? "checked" : ""}>${t("Транскрипт, түйін, шешімдер мен сұрақтарды тексердім", "Транскрипт, резюме, решения и вопросы проверены")}</label><div class="toolbar"><button class="primary" id="save">${t("Өзгерістерді сақтау", "Сохранить изменения")}</button><button id="discard">${t("Өзгерістерді қайтару", "Отменить правки")}</button><button id="approve">${t("Нұсқаны бекіту", "Утвердить версию")}</button><button id="reanalyze">${t("Қайта талдау", "Повторный анализ")}</button><span id="unsaved" class="muted"></span></div><small>${t("Бекіту — қолданбадағы нұсқаны сақтау; электрондық қолтаңба емес.", "Утверждение сохраняет версию в приложении; это не электронная подпись.")}</small></div>
+ <details><summary>${t("Өзгерістер журналы", "Журнал изменений")}</summary><ol class="events">${m.events.map((e) => `<li>${esc(e.ts)} · ${esc(e.action)}</li>`).join("")}</ol><button id="audit-detail">${t("Толық журнал", "Полный журнал")}</button><pre id="audit-json"></pre></details></fieldset>`;
   right();
   $$("[data-time]").forEach((el) => (el.onclick = () => seek(el.dataset.time)));
   $$("[data-segment-field]").forEach(
@@ -255,7 +284,7 @@ export function renderEditor(m) {
         d.reviewed = false;
         $("#reviewed").checked = false;
         d.assignments.forEach((a) => (a.review = "needs_review"));
-        dirty();
+        contentChanged();
       }),
   );
   $$("[data-tab]").forEach(
@@ -265,10 +294,22 @@ export function renderEditor(m) {
         $$("[data-tab]").forEach((b) => {
           b.classList.toggle("active", b === el);
           b.setAttribute("aria-selected", b === el);
+          b.tabIndex = b === el ? 0 : -1;
         });
         right();
       }),
   );
+  const tabs = $$("[data-tab]");
+  tabs.forEach((el, index) => {
+    el.tabIndex = el.dataset.tab === state.tab ? 0 : -1;
+    el.onkeydown = (event) => {
+      const next = event.key === "ArrowRight" ? (index + 1) % tabs.length : event.key === "ArrowLeft" ? (index + tabs.length - 1) % tabs.length : event.key === "Home" ? 0 : event.key === "End" ? tabs.length - 1 : null;
+      if (next === null) return;
+      event.preventDefault();
+      tabs[next].click();
+      tabs[next].focus();
+    };
+  });
   $("#reviewed").onchange = (e) => {
     d.reviewed = e.target.checked;
     dirty();
@@ -284,16 +325,16 @@ export function renderEditor(m) {
       renderEditor(await api(`/api/meetings/${m.id}`));
       notify(t("Нұсқа бекітілді", "Версия утверждена"));
     });
-  $("#reanalyze").onclick = () =>
-    guard(async () => {
+  $("#reanalyze").onclick = async () => {
+    const succeeded = await guard(async () => {
       await save();
       await api(
         `/api/meetings/${m.id}/reanalyze`,
         json("POST", { revision: state.meeting.revision }),
       );
-      location.hash = "meeting/" + m.id;
-      window.dispatchEvent(new Event("hashchange"));
     });
+    if (succeeded) window.dispatchEvent(new Event("hashchange"));
+  };
   $("#back").onclick = () => {
     location.hash = "meetings";
   };
@@ -317,7 +358,7 @@ export function renderEditor(m) {
       if (!v) return;
       const s = await api(`/api/meetings/${m.id}/versions/${v}`);
       const win = document.createElement("dialog");
-      win.innerHTML = `<h2>${t("Бекітілген нұсқа", "Утверждённая версия")} v${s.revision}</h2><pre>${esc(JSON.stringify(s, null, 2))}</pre><button>${t("Жабу", "Закрыть")}</button>`;
+      win.innerHTML = `<h2>${t("Бекітілген нұсқа", "Утверждённая версия")} v${s.revision}</h2>${protocolPreview(s.draft)}<button>${t("Жабу", "Закрыть")}</button>`;
       document.body.append(win);
       win.querySelector("button").onclick = () => win.close();
       win.onclose = () => win.remove();
@@ -355,6 +396,17 @@ export function renderEditor(m) {
         2,
       );
     });
+  $("#discard").onclick = () => {
+    const dialog = document.createElement("dialog");
+    dialog.innerHTML = `<h2>${t("Өзгерістерді қайтару?", "Отменить несохранённые правки?")}</h2><p>${t("Соңғы сақталған нұсқа ашылады.", "Будет открыта последняя сохранённая версия.")}</p><div class="toolbar"><button data-keep>${t("Жалғастыру", "Продолжить редактирование")}</button><button data-discard>${t("Қайтару", "Отменить правки")}</button></div>`;
+    document.body.append(dialog);
+    dialog.querySelector("[data-keep]").onclick = () => dialog.close();
+    dialog.querySelector("[data-discard]").onclick = () => { dialog.close(); renderEditor(state.meeting); };
+    dialog.onclose = () => dialog.remove();
+    dialog.showModal();
+  };
+  syncReview();
+  setBusyUI();
 }
 
 async function save() {
@@ -380,9 +432,25 @@ async function save() {
   );
 }
 async function guard(fn) {
+  if (state.busy) return;
+  state.busy = true;
+  setBusyUI();
   try {
     await fn();
+    return true;
   } catch (e) {
     notify(e.message, true);
+  } finally {
+    state.busy = false;
+    setBusyUI();
+    syncReview();
   }
+}
+
+function setBusyUI() {
+  const fields = $("#editor-fields");
+  if (fields) fields.disabled = state.busy;
+  $("#locale").disabled = state.busy;
+  $$("[data-nav]").forEach(el => el.disabled = state.busy);
+  if ($("#unsaved")) $("#unsaved").textContent = state.busy ? t("Сақталуда…", "Выполняется…") : state.dirty ? t("Сақталмаған өзгерістер", "Несохранённые изменения") : t("Сақталған", "Все изменения сохранены");
 }

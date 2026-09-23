@@ -40,6 +40,8 @@ def endpoint(mode):
         raise ProcessingError("HYBRID_ENDPOINT: HTTPS required")
     if not model:
         raise ProcessingError("LLM_MODEL_MISSING: configure backend/.env")
+    if mode == "HYBRID" and not config.LLM_API_KEY:
+        raise ProcessingError("LLM_API_KEY_MISSING: configure LLM_API_KEY in backend/.env")
     return url.rstrip("/") + "/chat/completions", model
 
 
@@ -58,6 +60,33 @@ def chunks(segments, limit=12000):
         size += n
     if batch:
         yield batch
+
+
+def check_context_size(result):
+    if len(result.model_dump_json()) > 60000:
+        raise ProcessingError(
+            "ANALYSIS_CONTEXT_LIMIT: cumulative output exceeds 60000 characters; split meeting. Nothing was silently truncated."
+        )
+
+
+def merge_document(previous, candidate):
+    """Preserve earlier findings when a model omits them in a later chunk."""
+    candidate.summary = list(dict.fromkeys(previous.summary + candidate.summary))
+    candidate.questions = list(dict.fromkeys(previous.questions + candidate.questions))
+    decisions = {}
+    for statement in [*previous.decisions, *candidate.decisions]:
+        key = (statement.kind, statement.text)
+        if key not in decisions:
+            decisions[key] = statement.model_copy(deep=True)
+            decisions[key].evidence = []
+        merged = decisions[key]
+        evidence = {
+            (e.segment_id, e.quote, e.start, e.end): e
+            for e in [*merged.evidence, *statement.evidence]
+        }
+        merged.evidence = list(evidence.values())
+    candidate.decisions = list(decisions.values())
+    return candidate
 
 
 def analyze(segments, meta, progress=lambda _: None):
@@ -90,11 +119,7 @@ def analyze(segments, meta, progress=lambda _: None):
         for i, batch in enumerate(batches):
             progress(f"analysis_chunk_{i + 1}_of_{len(batches)}")
             seen.extend(batch)
-            ledger = result.model_dump_json()
-            if len(ledger) > 60000:
-                raise ProcessingError(
-                    "ANALYSIS_CONTEXT_LIMIT: cumulative output exceeds 60000 characters; split meeting. Nothing was silently truncated."
-                )
+            check_context_size(result)
             payload = dict(
                 meeting_date=meta.meeting_at.isoformat(),
                 participants=meta.participants,
@@ -127,6 +152,11 @@ def analyze(segments, meta, progress=lambda _: None):
                     candidate = Analysis.model_validate_json(
                         choice["message"]["content"]
                     )
+                    # Only the editor can create manual entries or confirm review.
+                    for a in candidate.assignments:
+                        a.review, a.origin, a.unspecified = (
+                            "needs_review", "extracted", []
+                        )
                     validate_evidence(candidate, seen)
                     if len({a.id for a in candidate.assignments}) != len(
                         candidate.assignments
@@ -145,11 +175,6 @@ def analyze(segments, meta, progress=lambda _: None):
                                 {(e.segment_id, e.quote) for e in a.evidence}
                             ):
                                 raise ValueError("Previous evidence was dropped")
-                        a.review, a.origin, a.unspecified = (
-                            "needs_review",
-                            "extracted",
-                            [],
-                        )
                         source = " ".join(e.quote for e in a.evidence)
                         if a.owner and a.owner not in source:
                             a.owner = None
@@ -166,9 +191,18 @@ def analyze(segments, meta, progress=lambda _: None):
                         if a.expected_result and a.expected_result not in source:
                             a.expected_result = None
                             a.uncertainty.append("result_not_in_evidence")
+                    candidate = merge_document(result, candidate)
+                    check_context_size(candidate)
                     result = candidate
                     valid = True
                     break
+                except httpx.HTTPStatusError as error:
+                    code = error.response.status_code
+                    if code in (401, 403):
+                        raise ProcessingError("LLM_AUTH_FAILED: check API key and model access") from None
+                    if code == 429:
+                        raise ProcessingError("LLM_RATE_LIMIT: check provider quota or retry later") from None
+                    raise ProcessingError(f"LLM_HTTP_ERROR: provider returned HTTP {code}; check endpoint and model") from None
                 except httpx.HTTPError:
                     raise ProcessingError(
                         "LLM_UNAVAILABLE: endpoint rejected request or did not respond; check backend/.env and local server"

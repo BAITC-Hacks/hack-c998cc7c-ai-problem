@@ -1,111 +1,63 @@
 # Хаттама AI
 
-Кездесу жазбасын жергілікті тану, дәлелдері бар тапсырмалар шығару, хаттаманы тексеру және нұсқасын бекіту. FastAPI + Pydantic + SQLAlchemy/SQLite. Бұрынғы статикалық frontend сақталып дамытылды; React-ке себепсіз көшіру жасалмады.
+Локальное приложение для расшифровки встреч, подготовки протоколов и проверки поручений.
+FastAPI + SQLite + браузерный интерфейс. По умолчанию распознавание аудио и анализ текста
+выполняются через отдельно настроенные OpenAI-совместимые API.
 
-## Іске қосу
+## Быстрый запуск
 
-Python 3.11–3.12 ұсынылады. Осы Windows жобасында `.venv` және `tiny` ASR моделі дайын; `backend/.env` осы модельге бапталған. Жеңіл `tiny` моделі сөйлеу сапасын бағалауға жеткіліксіз. Қалыпты орнатуда `small` бөлек жүктеледі.
+Python 3.11–3.12. В текущем окружении `.venv` уже установлено.
+Заполните адреса, модели и ключи в `backend/.env` по [LOCAL_API.md](LOCAL_API.md).
 
 ```powershell
-cd C:\Users\Admin\Downloads\hackaton\hack-c998cc7c-ai-problem
 powershell -ExecutionPolicy Bypass -File scripts/run.ps1
 ```
 
-Браузер: http://127.0.0.1:8000. Бір сервер процесін пайдаланыңыз. Аутентификация жоқ: интернетке жарияламаңыз.
+Откройте http://127.0.0.1:8000. Один сервер, один worker. Остановка — Ctrl+C в терминале.
+Cloudflare для текущего сценария не используется. Записи и документы хранятся локально;
+аудио и текст передаются выбранным API-провайдерам.
 
-Жаңа Windows ортасы:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts/setup.ps1 -Python python
-.\.venv\Scripts\python.exe scripts/download_model.py --model small
-powershell -ExecutionPolicy Bypass -File scripts/run.ps1
-```
-
-Linux:
-
-```bash
-bash scripts/setup.sh
-.venv/bin/python scripts/download_model.py --model small
-bash scripts/run.sh
-```
-
-`setup` тек Python пакеттерін орнатады. ASR модельдері бөлек жүктеледі. Жүйелік FFmpeg болмаса, imageio-ffmpeg пакетінің бинарлық файлы қолданылады. Linux-та PDF үшін DejaVu Sans немесе `PDF_FONT` арқылы қазақ әріптері бар TTF қажет. Windows-та Arial пайдаланылады.
-
-## Режимдер
-
-`backend/.env.example` файлын `backend/.env` етіп көшіріңіз. Құпия кілттер тек сол жерде; root `.env` оқылмайды. Әдепкі ASR: `backend/models/small`, CPU int8. Өзгерту: `WHISPER_MODEL` — жергілікті каталогтың толық жолы.
-
-- **LOCAL (әдепкі):** ASR және LLM осы компьютерде. OpenAI-compatible жергілікті LLM серверін өзіңіз іске қосыңыз; `LLM_LOCAL_URL=http://127.0.0.1:8080/v1`, `LLM_LOCAL_MODEL=...`. URL тек сандық loopback мекенжайын қабылдайды; proxy және redirect өшірулі. Қолданба LLM моделін жеткізбейді.
-- **RULES:** жүктеу кезінде айқын таңдалатын шектеулі жергілікті ережелер. LLM қажет емес. Түйін тек айқын шешімдерден алынады; күрделі тұжырымдарды адам толықтырады.
-- **HYBRID:** жүктеу формасында режимді таңдап, транскриптті сыртқы API-ге жіберуге келісу қажет. `LLM_HYBRID_URL` (HTTPS), `LLM_HYBRID_MODEL`, `LLM_API_KEY` серверде бапталады. Аудио жергілікті қалады. Бұл жабық контур емес.
-
-Сыртқы API-ге автоматты ауысу жоқ. Модель немесе LLM қолжетімсіз болса, нақты қате сақталады. LLM қатесі кезінде дайын транскрипт қолмен тексеруге қалады. Қателікті түзеткеннен кейін «Қайта талдау» таңдаңыз.
-
-## GitHub-тан тексеру және сыртқы LLM API қосу
-
-Бұл бөлім репозиторийді жаңадан клондайтын қазылар мен әзірлеушілерге арналған. Құпия кілттер репозиторийге кірмейді және жоба авторының промокредиттері басқа пайдаланушыға берілмейді. API сценарийін тексеруші өзінің кілтін `backend/.env` файлына қосады. `.env` файлдарын commit жасамаңыз.
-
-Қазіргі архитектурада екі AI кезеңі бөлек жұмыс істейді:
-
-1. **ASR (аудионы мәтінге айналдыру)** — тек жергілікті `faster-whisper` арқылы орындалады. Сондықтан кез келген толық аудио сценарийі үшін ASR моделін бөлек жүктеу қажет.
-2. **LLM талдауы (түйін, шешімдер, тапсырмалар және дәлелдер)** — жергілікті endpoint, `RULES` немесе сыртқы OpenAI-compatible API арқылы орындалады.
-
-### 1. Кілтсіз тексеру
-
-Орнатудан кейін ASR моделін жүктеп, қолданбаны іске қосыңыз:
-
-```bash
-bash scripts/setup.sh
-.venv/bin/python scripts/download_model.py --model small
-bash scripts/run.sh
-```
-
-Windows үшін:
+Для новой установки:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts/setup.ps1 -Python python
-.\.venv\Scripts\python.exe scripts/download_model.py --model small
-powershell -ExecutionPolicy Bypass -File scripts/run.ps1
+Copy-Item backend/.env.example backend/.env
+# Заполните backend/.env, затем запустите scripts/run.ps1.
 ```
 
-Жүктеу формасында **RULES** режимін таңдаңыз. Бұл режимге LLM кілті қажет емес, бірақ аудионы тану жергілікті ASR моделін бәрібір қолданады. RULES — функцияларды және толық жұмыс жолын сыртқы сервис пен ақылы сұраусыз тексеруге арналған шектеулі fallback.
+Linux: `bash scripts/setup.sh`, создайте `backend/.env`, затем `bash scripts/run.sh`.
+Для аудио-API Whisper-модель не нужна. FFmpeg используется для подготовки файлов;
+при отсутствии системного бинарника доступен imageio-ffmpeg. Для PDF на Linux нужен
+DejaVu Sans или кириллический TTF через `PDF_FONT`.
 
-### 2. OpenAI арқылы LLM талдауын қосу
+## Режимы ИИ
 
-`backend/.env.example` файлын `backend/.env` етіп көшіріп, келесі мәндерді толтырыңыз:
+Два независимых выбора при загрузке:
 
-```env
-LLM_HYBRID_URL=https://api.openai.com/v1
-LLM_HYBRID_MODEL=<аккаунтта қолжетімді chat-completions model ID>
-LLM_API_KEY=<өз OpenAI API кілтіңіз>
+| Этап | По умолчанию | Локальная альтернатива |
+| --- | --- | --- |
+| Распознавание аудио | API: ASR_API_URL / ASR_API_MODEL / ASR_API_KEY | faster-whisper, WHISPER_MODEL |
+| Анализ текста | HYBRID: LLM_HYBRID_URL / LLM_HYBRID_MODEL / LLM_API_KEY | LOCAL — локальный LLM; RULES — правила |
+
+Передача аудио и текста подтверждается отдельно. Автоматического переключения провайдеров
+нет. Ключи находятся только в `backend/.env`, не в браузере и не в Git.
+API распознавания должен поддерживать `verbose_json` и сегменты с временными метками.
+Подробная настройка, ограничения и восстановление: [LOCAL_API.md](LOCAL_API.md).
+
+Локальная модель `small` уже установлена в текущем окружении. Для новой установки
+офлайн-распознавания: `.venv/Scripts/python.exe scripts/download_model.py --model small`.
+LOCAL требует отдельного локального LLM по `LLM_LOCAL_URL`; RULES не требует LLM.
+
+## Проверки
+
+```powershell
+.venv/Scripts/python.exe -m pytest -q
+npm.cmd run check --prefix frontend
+npm.cmd test --prefix frontend
 ```
 
-Серверді қайта іске қосыңыз. Жүктеу кезінде **HYBRID** режимін таңдап, транскриптті сыртқы API-ге жіберуге келісім беріңіз. Бұл режимде аудио мен ASR жергілікті қалады; сыртқы сервиске тек дайын транскрипт пен кездесу метадеректері жіберіледі.
-
-### 3. NVIDIA API арқылы LLM талдауын қосу
-
-NVIDIA API Catalog ішінен OpenAI-compatible Chat Completions моделін таңдап, сол беттегі нақты model ID-ді пайдаланыңыз:
-
-```env
-LLM_HYBRID_URL=https://integrate.api.nvidia.com/v1
-LLM_HYBRID_MODEL=<NVIDIA API Catalog-та көрсетілген model ID>
-LLM_API_KEY=<өз NVIDIA API кілтіңіз>
-```
-
-Серверді қайта іске қосып, жүктеу формасында **HYBRID** режимін және деректерді жіберуге келісімді таңдаңыз. Бір іске қосылған сервер процесі бір HYBRID endpoint қолданады; OpenAI мен NVIDIA арасында ауысу үшін `backend/.env` мәндерін өзгертіп, серверді қайта іске қосыңыз.
-
-### 4. Автоматты тесттер
-
-Негізгі тесттер API кілттерін және ақылы сұрауларды қажет етпейді:
-
-```bash
-.venv/bin/python -m pytest -q
-cd frontend && npm run check
-```
-
-Нақты сыртқы LLM-мен сәтті жауап автоматты CI тестіне кірмейді: мұндай тест құпия кілт пен кредит жұмсайды. API интеграциясын қысқа тест аудиосымен қолмен тексеріңіз. Кілттерді frontend коды, скриншот, лог немесе Git тарихына қоспаңыз.
-
-> **Маңызды шектеу:** сыртқы ASR API бұл нұсқада әлі іске асырылмаған. `WHISPER_MODEL` орнына URL немесе OpenAI кілтін беру жұмыс істемейді. Локал Whisper-ді толық ауыстыру үшін бөлек `ASR_PROVIDER` интерфейсі мен аудио транскрипция API клиентін қосу қажет. Оған дейін GitHub-тан толық аудио демонстрация жасау үшін жергілікті модель міндетті.
+Тесты API используют имитацию провайдера и не расходуют ключи или квоту.
+Результаты и границы проверки: [VALIDATION.md](VALIDATION.md).
 
 ## Жұмыс жолы
 

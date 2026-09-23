@@ -5,6 +5,9 @@ export const state = {
   draft: null,
   tab: "summary",
   dirty: false,
+  busy: false,
+  contentDirty: false,
+  generation: 0,
   timer: null,
 };
 export const t = (kk, ru) => (state.locale === "kk" ? kk : ru);
@@ -61,6 +64,7 @@ export function dirty() {
   state.dirty = true;
   const x = $("#unsaved");
   if (x) x.textContent = t("Сақталмаған өзгерістер", "Несохранённые изменения");
+  document.dispatchEvent(new Event("draftchange"));
 }
 export function reason(code) {
   return (

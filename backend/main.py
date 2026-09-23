@@ -8,7 +8,6 @@ from zoneinfo import ZoneInfo
 from urllib.parse import urlsplit
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, Response
-from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from pydantic import ValidationError
 import config
@@ -20,6 +19,7 @@ from agents.export import build_docx, build_pdf
 
 @asynccontextmanager
 async def lifespan(app):
+    config.validate_deployment()
     db.init_db()
     owned = orchestrator.start()
     yield
@@ -29,11 +29,13 @@ async def lifespan(app):
 
 app = FastAPI(title="Хаттама AI", version="0.2.0", lifespan=lifespan)
 from request_limit import RequestLimit
+from access import SharedPasswordAuth
 
 app.add_middleware(RequestLimit)
+app.add_middleware(SharedPasswordAuth)
 app.add_middleware(
     TrustedHostMiddleware,
-    allowed_hosts=["localhost", "127.0.0.1", "[::1]", "testserver"],
+    allowed_hosts=config.ALLOWED_HOSTS,
 )
 
 
@@ -41,7 +43,16 @@ app.add_middleware(
 async def local_origin(request: Request, call_next):
     origin = request.headers.get("origin")
     if request.method not in ("GET", "HEAD", "OPTIONS") and origin:
-        if urlsplit(origin).netloc != request.headers.get("host"):
+        try:
+            parsed = urlsplit(origin)
+            same_origin = (
+                parsed.scheme == request.url.scheme
+                and parsed.netloc == request.headers.get("host")
+                and not parsed.path and not parsed.query and not parsed.fragment
+            )
+        except ValueError:
+            same_origin = False
+        if not same_origin:
             return JSONResponse({"detail": "Cross-origin writes are disabled"}, 403)
     if request.headers.get("sec-fetch-site") == "cross-site":
         return JSONResponse({"detail": "Cross-site access is disabled"}, 403)
@@ -82,17 +93,46 @@ def mutate(fn, *args):
 @app.get("/api/health")
 def health():
     from shutil import which
+    from llm_client import endpoint, ProcessingError
+    from agents.transcribe_api import endpoint as audio_endpoint
+
+    def configured(check):
+        try:
+            check()
+            return True
+        except (ProcessingError, ValueError):
+            return False
+
+    def hostname(url):
+        try:
+            return urlsplit(url).hostname
+        except ValueError:
+            return None
 
     return dict(
         status="ok",
-        default_mode="LOCAL",
+        default_mode=config.DEFAULT_MODE,
+        default_asr_mode=config.DEFAULT_ASR_MODE,
+        asr_api_configured=configured(audio_endpoint),
+        asr_api_endpoint=hostname(config.ASR_API_URL),
+        asr_api_model=config.ASR_API_MODEL,
+        hybrid_configured=configured(lambda: endpoint('HYBRID')),
+        hybrid_model=config.LLM_HYBRID_MODEL,
         model_available=(Path(config.WHISPER_MODEL) / "model.bin").is_file(),
         ffmpeg_available=bool(which(config.FFMPEG)),
         diarization="manual",
-        hybrid_endpoint=urlsplit(config.LLM_HYBRID_URL).hostname,
+        hybrid_endpoint=hostname(config.LLM_HYBRID_URL),
         local_endpoint=config.LLM_LOCAL_URL,
         max_upload_mb=config.MAX_UPLOAD_BYTES // 1024 // 1024,
+        access_protected=bool(config.APP_AUTH_PASSWORD),
+        public_mode=config.PUBLIC_MODE,
+        worker_running=bool(orchestrator._thread and orchestrator._thread.is_alive()),
     )
+
+
+@app.get("/healthz")
+def healthz():
+    return {"status": "ok"}
 
 
 @app.post("/api/upload", status_code=202)
@@ -102,11 +142,20 @@ def upload(file: UploadFile = File(...), metadata: str = Form(...)):
     except (ValidationError, ValueError):
         raise HTTPException(
             422,
-            "Invalid metadata: title, meeting date/time, IANA timezone and explicit HYBRID consent are required",
+            "Invalid metadata: title, meeting date/time, IANA timezone and explicit consent for external audio/text transfer are required",
         ) from None
     ext = Path(file.filename or "").suffix.lower()
     if ext not in config.ALLOWED_EXT:
         raise HTTPException(415, "Supported formats: WAV, MP3, MP4")
+    from llm_client import endpoint, ProcessingError
+    from agents.transcribe_api import endpoint as audio_endpoint
+    try:
+        if meta.mode == 'HYBRID':
+            endpoint('HYBRID')
+        if meta.asr_mode == 'API':
+            audio_endpoint()
+    except (ProcessingError, ValueError) as error:
+        raise HTTPException(503, str(error)) from None
     path = config.UPLOAD_DIR / (uuid4().hex + ext)
     size = 0
     try:
@@ -226,8 +275,7 @@ def audio(mid: int):
 @app.get("/api/assignments")
 def assignments():
     rows = []
-    for item in db.list_meetings():
-        m = db.get_meeting(item["id"])
+    for m in db.list_assignment_drafts():
         today = datetime.now(ZoneInfo(m["metadata"]["timezone"])).date().isoformat()
         for a in m["draft"]["assignments"]:
             rows.append(
@@ -290,7 +338,11 @@ def index():
     return FileResponse(config.ROOT / "frontend/index.html")
 
 
-app.mount("/static", StaticFiles(directory=config.ROOT / "frontend"), name="static")
+@app.get("/static/{asset}")
+def static_asset(asset: str):
+    if asset not in {"app.js", "editor.js", "shared.js", "views.js", "screens.js", "styles.css", "favicon.svg"}:
+        raise HTTPException(404, "Asset not found")
+    return FileResponse(config.ROOT / "frontend" / asset)
 
 if __name__ == "__main__":
     import uvicorn

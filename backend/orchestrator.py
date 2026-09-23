@@ -8,6 +8,7 @@ import subprocess
 import config
 import db
 from agents.transcribe import transcribe_audio
+from agents.transcribe_api import transcribe_api
 from diarization import ManualDiarizer
 from llm_client import ProcessingError, analyze
 from schemas import Draft, Metadata, Segment
@@ -76,6 +77,7 @@ def decode(path, output):
 def process(m):
     mid = m["id"]
     try:
+        metadata = Metadata.model_validate(m["metadata"])
         if m["checkpoint"] is not None:
             segments = [Segment.model_validate(s) for s in m["checkpoint"]]
         else:
@@ -83,7 +85,8 @@ def process(m):
             normalized = Path(m["path"]).with_suffix(".decoded.wav")
             decode(m["path"], normalized)
             db.stage(mid, "transcribe")
-            segments = transcribe_audio(normalized)
+            segments = (transcribe_api(normalized, lambda stage: db.stage(mid, stage))
+                        if metadata.asr_mode == "API" else transcribe_audio(normalized))
             if not segments:
                 raise ProcessingError(
                     "NO_SPEECH: no speech recognized; no minutes were generated"
@@ -93,7 +96,7 @@ def process(m):
         db.stage(mid, "analyze")
         result = analyze(
             segments,
-            Metadata.model_validate(m["metadata"]),
+            metadata,
             lambda stage: db.stage(mid, stage),
         )
         draft = Draft(**result.model_dump(), transcript=segments)

@@ -134,6 +134,17 @@ def list_meetings():
         ]
 
 
+def list_assignment_drafts():
+    """Read register data in one query without loading per-meeting history."""
+    with engine.connect() as c:
+        return [
+            dict(id=r.id, revision=r.revision, metadata=json.loads(r.metadata), draft=json.loads(r.draft))
+            for r in c.execute(
+                text("SELECT id,revision,metadata,draft FROM meetings_v2 ORDER BY id DESC")
+            )
+        ]
+
+
 def claim():
     with transaction() as c:
         row = (
@@ -249,17 +260,23 @@ def save_draft(mid, revision, draft):
             else:
                 a["origin"] = "manual"
                 a["review"] = "needs_review"
-        # The source edit invalidates ALL derived output, including summary/decisions.
-        if before["transcript"] != draft["transcript"]:
+        source_changed = before["transcript"] != draft["transcript"]
+        if any(before[field] != draft[field] for field in (
+            "transcript", "summary", "decisions", "questions"
+        )):
             draft["reviewed"] = False
+        # The source edit invalidates all derived output and any pending candidate.
+        if source_changed:
             for a in draft["assignments"]:
                 a["review"] = "needs_review"
                 a["uncertainty"] = list(
                     dict.fromkeys(a["uncertainty"] + ["source_changed"])
                 )
         c.execute(
-            text("UPDATE meetings_v2 SET draft=:d,revision=revision+1 WHERE id=:m"),
-            dict(m=mid, d=encode(draft)),
+            text("UPDATE meetings_v2 SET draft=:d,"
+                 "candidate=CASE WHEN :changed THEN NULL ELSE candidate END,"
+                 "revision=revision+1 WHERE id=:m"),
+            dict(m=mid, d=encode(draft), changed=source_changed),
         )
         audit(c, mid, "draft_edited", before, draft)
 
@@ -329,6 +346,8 @@ def apply_candidate(mid, revision):
         m = editable(c, mid, revision)
         if not m["candidate"]:
             raise ValueError("No candidate")
+        if m["candidate"]["transcript"] != m["draft"]["transcript"]:
+            raise ValueError("Candidate source is stale; run analysis again")
         # Explicit replacement is initiated by the review UI; original remains in audit and versions.
         c.execute(
             text(

@@ -5,20 +5,24 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Хаттама AI</title>
     <link rel="stylesheet" href="/static/styles.css" />
+    <link rel="icon" href="/static/favicon.svg" type="image/svg+xml" />
   </head>
   <body>
-    <header>
-      <a class="brand" href="/">Хаттама <span>AI</span></a>
+    <a class="skip-link" href="#app">Мазмұнға өту / К содержимому</a>
+    <header class="sidebar">
+      <a class="brand" href="#meetings"><img src="/static/favicon.svg" width="36" height="36" alt="">Хаттама <span>AI</span></a>
+      <p class="brand-caption" id="brand-caption">Кездесуден — нәтижеге</p>
       <nav aria-label="Navigation">
         <button data-nav="meetings">Кездесулер</button
         ><button data-nav="tasks">Тапсырмалар</button
         ><button data-nav="settings">Баптаулар</button>
       </nav>
+      <div class="sidebar-note"><span class="status-dot" aria-hidden="true"></span><span id="workspace-label">Жұмыс кеңістігі</span><small id="workspace-caption">Транскрипт · Хаттама · Тапсырмалар</small></div>
       <button id="locale" aria-label="Switch language">RU</button>
     </header>
     <main>
       <div id="message" role="status" aria-live="polite"></div>
-      <div id="app"></div>
+      <div id="app" tabindex="-1"></div>
     </main>
     <script type="module" src="/static/app.js"></script>
   </body>

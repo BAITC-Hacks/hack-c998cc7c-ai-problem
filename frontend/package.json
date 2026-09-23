@@ -2,6 +2,10 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "check": "node --check app.js && node --check editor.js && node --check shared.js"
+    "check": "node --check app.js && node --check editor.js && node --check shared.js && node --check screens.js && node --check views.js",
+    "test": "node tests/run.mjs"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.63.0"
   }
 }

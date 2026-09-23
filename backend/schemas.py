@@ -16,6 +16,9 @@ class Metadata(Strict):
     participants: list[str] = Field(default_factory=list, max_length=100)
     mode: Literal["LOCAL", "HYBRID", "RULES"] = "LOCAL"
     hybrid_consent: bool = False
+    # Missing fields in historical meetings retain local audio processing.
+    asr_mode: Literal["LOCAL", "API"] = "LOCAL"
+    audio_consent: bool = False
 
     @field_validator("timezone")
     @classmethod
@@ -28,6 +31,8 @@ class Metadata(Strict):
 
     @model_validator(mode="after")
     def consent(self):
+        if self.asr_mode == "API" and not self.audio_consent:
+            raise ValueError("API ASR requires explicit audio transfer consent")
         if self.mode == "HYBRID" and not self.hybrid_consent:
             raise ValueError("HYBRID requires explicit transcript transfer consent")
         if self.meeting_at.tzinfo is None:
