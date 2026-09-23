@@ -130,6 +130,7 @@ test('a delayed meeting response does not replace a newer route', async ({ page 
   const completed = page.waitForResponse('**/api/meetings/1');
   release();
   await completed;
+  await page.waitForLoadState('networkidle');
   await expect(page.locator('h1')).toHaveText('Настройки');
   await expect(page.locator('#editor-fields')).toHaveCount(0);
 });
