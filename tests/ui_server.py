@@ -7,6 +7,7 @@ import socket
 import sys
 import tempfile
 import wave
+from fastapi import HTTPException, Request
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'backend'))
@@ -60,10 +61,20 @@ def fixture_identity():
     return {'token': token}
 
 
+@main.app.post('/__test_shutdown__')
+def stop_fixture(request: Request):
+    if not secrets.compare_digest(request.headers.get('X-Test-Token', ''), token):
+        raise HTTPException(403, 'Fixture token required')
+    server.should_exit = True
+    return {'status': 'stopping'}
+
+
 if ready_file:
     Path(ready_file).write_text(json.dumps({'port': port, 'token': token}), encoding='utf-8')
 try:
-    uvicorn.Server(uvicorn.Config(main.app, host='127.0.0.1', port=port, log_level='warning')).run(sockets=[listener])
+    server = uvicorn.Server(uvicorn.Config(main.app, host='127.0.0.1', port=port, log_level='warning'))
+    server.run(sockets=[listener])
 finally:
     listener.close()
+    db.engine.dispose()
     temporary.cleanup()

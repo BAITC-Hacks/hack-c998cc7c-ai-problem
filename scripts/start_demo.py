@@ -30,9 +30,11 @@ def creation_time(process):
 
 def stop_tree(process):
     if process is not None and process.poll() is None:
-        subprocess.run(['taskkill', '/PID', str(process.pid), '/T', '/F'],
+        result = subprocess.run(['taskkill', '/PID', str(process.pid), '/T', '/F'],
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                        creationflags=subprocess.CREATE_NO_WINDOW, check=False)
+        if result.returncode and process.poll() is None:
+            raise RuntimeError(f'Could not stop managed process {process.pid}')
         process.wait(timeout=10)
 
 

@@ -18,12 +18,21 @@ const server = spawn(python, [path.join(root, 'tests/ui_server.py')], {
 let serverError;
 server.on('error', error => { serverError = error; });
 let runner;
+let baseURL;
 let result = 1;
 let interrupted = false;
 
-async function stop(child) {
+async function stop(child, gracefulURL) {
   if (!child?.pid || child.exitCode !== null || child.signalCode !== null) return;
   const exited = new Promise(resolve => child.once('exit', resolve));
+  if (gracefulURL) {
+    let graceTimeout;
+    try {
+      await fetch(`${gracefulURL}/__test_shutdown__`, { method: 'POST', headers: { 'X-Test-Token': token }, signal: AbortSignal.timeout(1000) });
+      await Promise.race([exited, new Promise(resolve => { graceTimeout = setTimeout(resolve, 5000); })]);
+    } catch {} finally { clearTimeout(graceTimeout); }
+    if (child.exitCode !== null || child.signalCode !== null) return;
+  }
   if (process.platform === 'win32') {
     spawnSync('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' });
   } else {
@@ -38,7 +47,6 @@ const interrupt = () => { interrupted = true; void stop(runner); };
 process.on('SIGINT', interrupt);
 process.on('SIGTERM', interrupt);
 try {
-  let baseURL;
   for (let attempt = 0; attempt < 60; attempt++) {
     if (interrupted) throw Error('Test run interrupted');
     if (serverError) throw serverError;
@@ -66,13 +74,17 @@ try {
   console.error(error.message);
 } finally {
   await stop(runner);
-  await stop(server);
+  await stop(server, baseURL);
   // Windows process-tree termination cannot execute Python cleanup handlers.
   const cleanupPath = path.resolve(directory);
   if (path.dirname(cleanupPath) !== temporaryRoot || !path.basename(cleanupPath).startsWith('khattama-browser-')) {
     throw Error('Refusing to clean up outside the generated test directory');
   }
   await rm(cleanupPath, { recursive: true, force: true, maxRetries: 3 });
+  if (server.exitCode !== null && server.exitCode !== 0) {
+    console.error(`Fixture server exited with code ${server.exitCode}`);
+    result = 1;
+  }
   process.removeListener('SIGINT', interrupt);
   process.removeListener('SIGTERM', interrupt);
 }
