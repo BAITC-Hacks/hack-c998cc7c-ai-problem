@@ -22,11 +22,13 @@ function navigation() {
   $("#workspace-label").textContent = t("Ортақ жұмыс кеңістігі", "Общее рабочее пространство");
   $("#workspace-caption").textContent = t("Транскрипт · Хаттама · Тапсырмалар", "Транскрипт · Протокол · Поручения");
   $$("[data-nav]").forEach((b) => {
-    b.textContent = {
-      meetings: t("Кездесулер", "Совещания"),
-      tasks: t("Тапсырмалар", "Поручения"),
-      settings: t("Баптаулар", "Настройки"),
-    }[b.dataset.nav];
+    const span = b.querySelector("span");
+    if (span)
+      span.textContent = {
+        meetings: t("Кездесулер", "Совещания"),
+        tasks: t("Тапсырмалар", "Поручения"),
+        settings: t("Баптаулар", "Настройки"),
+      }[b.dataset.nav];
     const active = b.dataset.nav === state.page || (b.dataset.nav === "meetings" && /^(meeting\/|upload)/.test(state.page));
     b.classList.toggle("active", active);
     if (active) b.setAttribute("aria-current", "page"); else b.removeAttribute("aria-current");

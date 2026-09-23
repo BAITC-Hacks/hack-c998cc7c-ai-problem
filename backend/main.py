@@ -120,7 +120,7 @@ def health():
         hybrid_model=config.LLM_HYBRID_MODEL,
         model_available=(Path(config.WHISPER_MODEL) / "model.bin").is_file(),
         ffmpeg_available=bool(which(config.FFMPEG)),
-        diarization="manual",
+        diarization="energy_turns",
         hybrid_endpoint=hostname(config.LLM_HYBRID_URL),
         local_endpoint=config.LLM_LOCAL_URL,
         max_upload_mb=config.MAX_UPLOAD_BYTES // 1024 // 1024,

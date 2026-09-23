@@ -9,7 +9,7 @@ import config
 import db
 from agents.transcribe import transcribe_audio
 from agents.transcribe_api import transcribe_api
-from diarization import ManualDiarizer
+from diarization import diarize
 from llm_client import ProcessingError, analyze
 from schemas import Draft, Metadata, Segment
 
@@ -91,8 +91,11 @@ def process(m):
                 raise ProcessingError(
                     "NO_SPEECH: no speech recognized; no minutes were generated"
                 )
+            segments = diarize(
+                metadata.mode, segments, normalized,
+                lambda stage: db.stage(mid, stage),
+            )
             db.stage(mid, "diarization_manual", [s.model_dump() for s in segments])
-            segments = ManualDiarizer().assign(str(normalized), segments)
         db.stage(mid, "analyze")
         result = analyze(
             segments,

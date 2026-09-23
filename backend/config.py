@@ -23,6 +23,8 @@ ASR_API_MODEL = os.getenv("ASR_API_MODEL", "")
 ASR_API_KEY = os.getenv("ASR_API_KEY", "")
 # PCM mono 16 kHz: a 600-second part is about 19.2 MB.
 ASR_CHUNK_SECONDS = int(os.getenv("ASR_CHUNK_SECONDS", "600"))
+# Minimum pause (seconds) between segments that starts a new "Говорящий N" turn.
+DIARIZATION_GAP_SECONDS = float(os.getenv("DIARIZATION_GAP_SECONDS", "0.7"))
 MAX_UPLOAD_BYTES = int(os.getenv("MAX_UPLOAD_MB", "250")) * 1024 * 1024
 MAX_AUDIO_SECONDS = int(os.getenv("MAX_AUDIO_SECONDS", "14400"))
 from shutil import which

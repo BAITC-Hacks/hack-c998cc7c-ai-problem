@@ -1,4 +1,5 @@
 from datetime import date, datetime
+import re
 from typing import Literal
 from uuid import uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -108,8 +109,55 @@ def validate_evidence(analysis: Analysis, segments: list[Segment], require=True)
         ):
             raise ValueError("Extracted item has no evidence")
         for e in item.evidence:
-            s = lookup.get(e.segment_id)
-            if not s or e.quote not in s.text or e.start != s.start or e.end != s.end:
+            if not evidence_in_transcript(e, segments, lookup):
                 raise ValueError(
-                    "Evidence must match an existing segment and its exact timing"
+                    "Evidence must quote an existing contiguous transcript window "
+                    "covering the stated timings"
                 )
+
+
+_WS = re.compile(r"\s+")
+
+
+def _collapse(value):
+    return _WS.sub(" ", str(value)).strip()
+
+
+def evidence_in_transcript(evidence, segments, lookup, tolerance=0.5):
+    """Ground a piece of evidence in the transcript.
+
+    Whisper segments split mid-sentence, so the anchored segment plus its
+    nearest neighbours are accepted together: the quote must appear verbatim
+    (modulo whitespace) inside the contiguous window that covers the evidence
+    timings within ``tolerance`` seconds. Fabricated text is still rejected.
+    """
+    anchor = lookup.get(evidence.segment_id)
+    if anchor is None:
+        return False
+    quote = _collapse(evidence.quote)
+    if not quote:
+        return False
+    idx = next(
+        (i for i, s in enumerate(segments) if s.id == evidence.segment_id), None
+    )
+    if idx is None:
+        return False
+    lo = hi = idx
+    window = _collapse(anchor.text)
+    while True:
+        if (
+            segments[lo].start - tolerance <= evidence.start
+            and evidence.end <= segments[hi].end + tolerance
+            and quote in window
+        ):
+            return True
+        can_back = lo > 0
+        can_forward = hi + 1 < len(segments)
+        if not can_back and not can_forward:
+            return False
+        if can_back and (not can_forward or segments[lo - 1].end >= evidence.start - tolerance):
+            lo -= 1
+            window = _collapse(segments[lo].text) + " " + window
+        else:
+            hi += 1
+            window = window + " " + _collapse(segments[hi].text)

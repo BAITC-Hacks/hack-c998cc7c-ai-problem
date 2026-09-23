@@ -19,7 +19,7 @@ export function stageName(stage) {
   if (audio) return t(`Сөйлеуді тану: ${audio[1]} / ${audio[2]} бөлік`, `Распознавание: фрагмент ${audio[1]} из ${audio[2]}`);
   const chunk = /^analysis_chunk_(\d+)_of_(\d+)$/.exec(stage);
   if (chunk) return t(`Талдау: ${chunk[1]} / ${chunk[2]} бөлік`, `Анализ: фрагмент ${chunk[1]} из ${chunk[2]}`);
-  return ({ queued: t('Кезекте', 'В очереди'), recovered: t('Жалғастыру', 'Возобновление'), decode: t('Аудионы дайындау', 'Подготовка аудио'), transcribe: t('Сөйлеуді тану', 'Распознавание речи'), diarization_manual: t('Транскрипт дайын', 'Транскрипт готов'), analyze: t('Мазмұнды талдау', 'Анализ содержания'), review: t('Адамның тексеруі', 'Проверка человеком') })[stage] || stage;
+  return ({ queued: t('Кезекте', 'В очереди'), recovered: t('Жалғастыру', 'Возобновление'), decode: t('Аудионы дайындау', 'Подготовка аудио'), transcribe: t('Сөйлеуді тану', 'Распознавание речи'), diarization_manual: t('Сөйлеушілерді анықтау', 'Определение говорящих'), analyze: t('Мазмұнды талдау', 'Анализ содержания'), review: t('Адамның тексеруі', 'Проверка человеком') })[stage] || stage;
 }
 
 export function errorNotice(message) {

@@ -31,13 +31,16 @@ function syncReview() {
     el.disabled = state.contentDirty;
   });
   const confirmed = state.draft.assignments.filter(a => a.review === "confirmed").length;
+  const total = state.draft.assignments.length;
   const progress = $("#review-progress");
-  if (progress) progress.textContent = t(`Тексерілген тапсырмалар: ${confirmed} / ${state.draft.assignments.length}`, `Проверено поручений: ${confirmed} из ${state.draft.assignments.length}`);
+  if (progress) progress.textContent = t(`Тексерілген тапсырмалар: ${confirmed} / ${total}`, `Проверено поручений: ${confirmed} из ${total}`);
+  const bar = $("#review-progress-bar");
+  if (bar) bar.style.width = total ? `${(confirmed / total) * 100}%` : "0%";
   const hint = $("#review-hint");
   if (hint) hint.textContent = state.contentDirty ? t("Алдымен өзгерістерді сақтаңыз, содан кейін тексеруді растаңыз.", "Сначала сохраните правки, затем подтвердите проверку.") : t("Дереккөзді және тапсырмаларды тексеріп, нұсқаны бекітіңіз.", "Сверьте источник и поручения, затем утвердите версию.");
   if ($("#save")) $("#save").disabled = !state.dirty;
   if ($("#discard")) $("#discard").disabled = !state.dirty;
-  if ($("#approve")) $("#approve").disabled = state.contentDirty || !state.draft.reviewed || confirmed !== state.draft.assignments.length;
+  if ($("#approve")) $("#approve").disabled = state.contentDirty || !state.draft.reviewed || confirmed !== total;
 }
 document.addEventListener("draftchange", syncReview);
 
@@ -239,16 +242,23 @@ export function renderEditor(m, preserved = {}) {
   state.dirty = preserved.dirty || false;
   state.contentDirty = preserved.contentDirty || false;
   const d = state.draft;
+  const speakers = [...new Set(d.transcript.map(s => s.speaker).filter(Boolean))];
+  const hue = s => {
+    if (!s) return "";
+    const i = speakers.indexOf(s);
+    if (i < 0) return "";
+    return `style="--sp:${Math.round((i * 360) / Math.max(speakers.length, 1)) % 360}"`;
+  };
   $("#app").innerHTML =
     `<fieldset id="editor-fields"><div class="toolbar"><button id="back">← ${t("Кездесулер", "Совещания")}</button><span class="badge">${esc(m.metadata.mode)}</span><span class="spacer"></span><span>${t("Жоба", "Черновик")} · r${m.revision}</span></div><h1>${esc(m.metadata.title)}</h1><p class="muted">${esc(dateLabel(m.metadata.meeting_at, m.metadata.timezone))} · ${esc(m.metadata.timezone)} · ${esc(m.metadata.participants.join(", "))}</p>
  ${m.error ? `<p class="notice error">${esc(m.error)}</p>` : ""}
  <div class="toolbar version-bar"><label>${t("Экспорт нұсқасы", "Версия для экспорта")} <select id="version"><option value="">${t("Ағымдағы жоба", "Текущий черновик")}</option>${m.versions.map((v) => `<option value="${v.id}">v${v.revision} · ${esc(v.created_at.slice(0, 16))}</option>`).join("")}</select></label><label class="check"><input id="with-transcript" type="checkbox" checked>${t("Транскриптпен", "С транскриптом")}</label><button data-export="docx">DOCX ↓</button><button data-export="pdf">PDF ↓</button><button id="view-version">${t("Нұсқаны көру", "Просмотр версии")}</button></div>
- <div class="notice">${t("Сөйлеушілер автоматты анықталмайды. Әр сегментке атын қолмен беріңіз. Сөйлеуші міндетті түрде орындаушы емес.", "Говорящие автоматически не определяются. Назначьте имена сегментам вручную. Говорящий не обязательно исполнитель.")}</div>
+ <div class="notice info">${t("Сөйлеуші «Говорящий N» болып автоматты белгіленеді. Атын нақты адамға қолмен өзгертіңіз. Сөйлеуші міндетті түрде орындаушы емес.", "Говорящие автоматически помечаются как «Говорящий N». Переименуйте их в реальных людей вручную. Говорящий не обязательно является исполнителем.")}</div>
  ${m.candidate ? `<details class="panel candidate-panel"><summary>${t("Жаңа талдауды салыстыру", "Сравнить повторный анализ")}</summary><p class="muted">${t("Жаңа нәтиже ағымдағы черновикті тек сіз қолданған кезде ауыстырады.", "Новый результат заменит текущий черновик только после вашего решения.")}</p><div class="grid comparison"><section><h2>${t("Ағымдағы нұсқа", "Текущая версия")}</h2>${protocolPreview(m.draft)}</section><section><h2>${t("Жаңа талдау", "Новый анализ")}</h2>${protocolPreview(m.candidate)}</section></div><button id="apply-candidate">${t("Салыстырдым, жаңа нәтижені қолдану", "Применить новый результат")}</button></details>` : ""}
  <div class="workspace"><section class="panel"><h2>${t("Жазба және транскрипт", "Запись и транскрипт")}</h2><audio id="player" controls preload="metadata" src="/api/meetings/${m.id}/audio"></audio><div class="scroll">${d.transcript
    .map(
      (s, i) =>
-       `<article class="segment" data-segment="${esc(s.id)}"><div class="segment-top"><button class="time" data-time="${esc(s.id)}">▶ ${time(s.start)}–${time(s.end)}</button>${field(t("Сөйлеуші", "Говорящий"), input(s.speaker, `data-segment-field="${i}:speaker" placeholder="${t("Белгісіз", "Неизвестен")}"`))}${field(
+       `<article class="segment" data-segment="${esc(s.id)}" ${hue(s.speaker)}><div class="segment-top"><button class="time" data-time="${esc(s.id)}">${time(s.start)}–${time(s.end)}</button>${field(t("Сөйлеуші", "Говорящий"), input(s.speaker, `data-segment-field="${i}:speaker" placeholder="${t("Белгісіз", "Неизвестен")}"`))}${field(
          t("Тіл", "Язык"),
          `<select data-segment-field="${i}:language">${options(
            [
@@ -272,7 +282,7 @@ export function renderEditor(m, preserved = {}) {
        `<button role="tab" aria-selected="${state.tab === k}" data-tab="${k}" class="${state.tab === k ? "active" : ""}">${label}</button>`,
    )
    .join("")}</div><div id="right-content" role="tabpanel" aria-label="${t("Хаттама мазмұны", "Содержание протокола")}"></div></section></div>
- <div class="savebar"><div class="review-status"><strong id="review-progress"></strong><p id="review-hint" class="muted"></p></div><label class="check"><input type="checkbox" id="reviewed" ${d.reviewed ? "checked" : ""}>${t("Транскрипт, түйін, шешімдер мен сұрақтарды тексердім", "Транскрипт, резюме, решения и вопросы проверены")}</label><div class="toolbar"><button class="primary" id="save">${t("Өзгерістерді сақтау", "Сохранить изменения")}</button><button id="discard">${t("Өзгерістерді қайтару", "Отменить правки")}</button><button id="approve">${t("Нұсқаны бекіту", "Утвердить версию")}</button><button id="reanalyze">${t("Қайта талдау", "Повторный анализ")}</button><span id="unsaved" class="muted"></span></div><small>${t("Бекіту — қолданбадағы нұсқаны сақтау; электрондық қолтаңба емес.", "Утверждение сохраняет версию в приложении; это не электронная подпись.")}</small></div>
+ <div class="savebar"><div class="review-status"><strong id="review-progress"></strong><p id="review-hint" class="muted"></p></div><span class="review-progress" aria-hidden="true"><i id="review-progress-bar"></i></span><label class="check"><input type="checkbox" id="reviewed" ${d.reviewed ? "checked" : ""}>${t("Транскрипт, түйін, шешімдер мен сұрақтарды тексердім", "Транскрипт, резюме, решения и вопросы проверены")}</label><div class="toolbar"><button class="primary" id="save">${t("Өзгерістерді сақтау", "Сохранить изменения")}</button><button id="discard">${t("Өзгерістерді қайтару", "Отменить правки")}</button><button id="approve">${t("Нұсқаны бекіту", "Утвердить версию")}</button><button id="reanalyze">${t("Қайта талдау", "Повторный анализ")}</button><span id="unsaved" class="muted"></span></div><small>${t("Бекіту — қолданбадағы нұсқаны сақтау; электрондық қолтаңба емес.", "Утверждение сохраняет версию в приложении; это не электронная подпись.")}</small></div>
  <details><summary>${t("Өзгерістер журналы", "Журнал изменений")}</summary><ol class="events">${m.events.map((e) => `<li>${esc(e.ts)} · ${esc(e.action)}</li>`).join("")}</ol><button id="audit-detail">${t("Толық журнал", "Полный журнал")}</button><pre id="audit-json"></pre></details></fieldset>`;
   right();
   $$("[data-time]").forEach((el) => (el.onclick = () => seek(el.dataset.time)));
