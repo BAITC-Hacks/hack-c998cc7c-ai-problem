@@ -1,0 +1,31 @@
+# Зависимости Python
+*.pyc
+__pycache__/
+.venv/
+venv/
+*.egg-info/
+
+# Секреты и локальная конфигурация
+.env
+
+# Данные и загруженные файлы
+data/
+uploads/
+backend/models/
+*.mp3
+*.wav
+*.mp4
+*.m4a
+
+# Кэши моделей в репозитории (модели скачиваются setup.sh в ~/.cache)
+hf_cache/
+
+# Отчёты
+.pytest_cache/
+coverage.xml
+htmlcov/
+
+# IDE / ОС
+.vscode/
+.idea/
+.DS_Store

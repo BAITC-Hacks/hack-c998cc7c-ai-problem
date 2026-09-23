@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Хаттама AI — автопротоколирование совещаний</title>
+<link rel="stylesheet" href="/static/styles.css"/>
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <div class="logo">Х</div>
+    <div>
+      <div class="brand-name">Хаттама AI</div>
+      <div class="brand-sub">автопротокол совещаний · Самрук-Казына</div>
+    </div>
+  </div>
+  <nav class="tabs">
+    <button class="tab active" data-tab="new">Новое совещание</button>
+    <button class="tab" data-tab="dash">Дашборд поручений</button>
+  </nav>
+  <div id="llm-badge" class="llm-badge" title="Провайдер LLM">…</div>
+</header>
+
+<main>
+  <!-- Вкладка: новое совещание -->
+  <section id="tab-new" class="tab-pane active">
+    <div id="upload-card" class="card upload-card">
+      <div id="dropzone" class="dropzone">
+        <div class="dz-icon">📁</div>
+        <p class="dz-title">Перетащите аудио/видео совещания сюда</p>
+        <p class="dz-sub">или нажмите, чтобы выбрать файл (MP3, WAV, M4A, MP4, OGG…) · речь: рус / каз / смешанная</p>
+        <input type="file" id="file-input" accept=".mp3,.wav,.m4a,.mp4,.ogg,.flac,.webm,.aac" hidden/>
+      </div>
+      <div id="file-choosen" class="file-choosen hidden">
+        <span id="file-name"></span>
+        <button id="btn-upload" class="btn primary">Обработать</button>
+        <button id="btn-reset" class="btn ghost">Сбросить</button>
+      </div>
+      <p id="upload-error" class="error-text hidden"></p>
+    </div>
+
+    <div id="progress-card" class="card hidden">
+      <h2 class="card-title">Обработка совещания</h2>
+      <div id="progress-steps" class="steps"></div>
+      <div id="event-log" class="evlog"></div>
+    </div>
+
+    <div id="result-card" class="card hidden">
+      <div class="result-head">
+        <h2 class="card-title">Протокол совещания</h2>
+        <div class="result-meta" id="result-meta"></div>
+        <div class="export-btns">
+          <button class="btn ghost" data-export="txt">⬇ TXT</button>
+          <button class="btn ghost" data-export="docx">⬇ DOCX</button>
+          <button class="btn primary" data-export="pdf">⬇ PDF</button>
+        </div>
+      </div>
+      <div class="tabs-inline">
+        <button class="itab active" data-itab="assign">Поручения</button>
+        <button class="itab" data-itab="summary">Саммари</button>
+        <button class="itab" data-itab="transcript">Транскрипт</button>
+      </div>
+
+      <div id="i-assign" class="itab-pane active">
+        <div id="assign-list" class="assign-list"></div>
+        <p id="assign-empty" class="muted hidden">Явные поручения не обнаружены.</p>
+      </div>
+      <div id="i-summary" class="itab-pane">
+        <ul id="summary-list" class="slist"></ul>
+      </div>
+      <div id="i-transcript" class="itab-pane">
+        <div id="transcript-list" class="tlist"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Вкладка: дашборд -->
+  <section id="tab-dash" class="tab-pane">
+    <div class="card">
+      <h2 class="card-title">История совещаний и статусы поручений</h2>
+      <div id="dash-stats" class="dash-stats"></div>
+      <div id="dash-list" class="dash-list"></div>
+    </div>
+  </section>
+</main>
+
+<footer class="foot">Хаттама AI · трек AI-Problem · распознавание речи — локально (faster-whisper), LLM — OpenAI/NVIDIA (ключи организаторов) или офлайн-режим</footer>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
